@@ -28,6 +28,20 @@ describe('listTransactions', () => {
     const client = { request: vi.fn(async (path: string) => { expect(path).toBe('/plans/p1/categories/c9/transactions'); return { transactions: [] } }) } as any
     await new Ynab({ client, allowWrites: false }).listTransactions('p1', { categoryId: 'c9' })
   })
+  it('returns newest-first by default and oldest-first with sort: date_asc', async () => {
+    const client = { request: vi.fn(async () => ({ transactions: [
+      apiTxn({ id: 'old', date: '2025-08-01' }),
+      apiTxn({ id: 'mid', date: '2026-01-15' }),
+      apiTxn({ id: 'new', date: '2026-07-10' }),
+    ] })) } as any
+    const y = new Ynab({ client, allowWrites: false })
+    const desc: any = await y.listTransactions('p1', {})
+    expect(desc.transactions.map((t: any) => t.id)).toEqual(['new', 'mid', 'old'])
+    const asc: any = await y.listTransactions('p1', { sort: 'date_asc' })
+    expect(asc.transactions.map((t: any) => t.id)).toEqual(['old', 'mid', 'new'])
+    const page: any = await y.listTransactions('p1', { limit: 1 })
+    expect(page.transactions[0].id).toBe('new')
+  })
   it('aggregate mode returns sums not rows', async () => {
     const client = { request: vi.fn(async () => ({ transactions: [apiTxn(), apiTxn({ id: 't2', category_name: 'Fun', amount: -2000 })] })) } as any
     const res: any = await new Ynab({ client, allowWrites: false }).listTransactions('p1', { aggregate: 'category' })

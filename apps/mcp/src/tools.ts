@@ -29,7 +29,8 @@ export const tools: ToolDef[] = [
       limit: z.number().int().max(200).optional().describe('default 25'), offset: z.number().int().optional(),
       fields: z.array(z.string()).optional().describe('project only these fields'),
       aggregate: z.enum(['category', 'payee', 'month']).optional(),
-    }, handler: (y, a) => y.listTransactions(a.plan_id, { accountId: a.account_id, categoryId: a.category_id, payeeId: a.payee_id, sinceDate: a.since_date, untilDate: a.until_date, unapprovedOnly: a.unapproved_only, unclearedOnly: a.uncleared_only, search: a.search, minAmount: a.min_amount, maxAmount: a.max_amount, flagColor: a.flag_color, limit: a.limit, offset: a.offset, fields: a.fields, aggregate: a.aggregate }) },
+      sort: z.enum(['date_desc', 'date_asc']).optional().describe('row order before pagination; default date_desc (newest first)'),
+    }, handler: (y, a) => y.listTransactions(a.plan_id, { accountId: a.account_id, categoryId: a.category_id, payeeId: a.payee_id, sinceDate: a.since_date, untilDate: a.until_date, unapprovedOnly: a.unapproved_only, unclearedOnly: a.uncleared_only, search: a.search, minAmount: a.min_amount, maxAmount: a.max_amount, flagColor: a.flag_color, limit: a.limit, offset: a.offset, fields: a.fields, aggregate: a.aggregate, sort: a.sort }) },
   { name: 'get_transaction', description: 'One transaction in full, including split subtransactions.', schema: { plan_id: planId, transaction_id: z.string() }, handler: (y, a) => y.getTransaction(a.plan_id, a.transaction_id) },
   { name: 'create_transactions', description: 'Create one or more transactions (bulk). Supports splits via subtransactions (note: splits cannot be edited after creation — get them right or delete/recreate) and import_id for dedup.', write: true, schema: {
       plan_id: planId,

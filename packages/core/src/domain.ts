@@ -143,7 +143,7 @@ export class Ynab {
     }
   }
 
-  async listTransactions(planId: string, opts: TxnFilters & { limit?: number; offset?: number; fields?: (keyof Txn)[]; aggregate?: 'category' | 'payee' | 'month' } = {}) {
+  async listTransactions(planId: string, opts: TxnFilters & { limit?: number; offset?: number; fields?: (keyof Txn)[]; aggregate?: 'category' | 'payee' | 'month'; sort?: 'date_desc' | 'date_asc' } = {}) {
     const sinceDate = opts.sinceDate ?? defaultSince()
     const explicit = opts.sinceDate !== undefined
     const sub = [opts.accountId && `accounts/${opts.accountId}`, opts.categoryId && `categories/${opts.categoryId}`, opts.payeeId && `payees/${opts.payeeId}`].filter(Boolean)
@@ -155,6 +155,8 @@ export class Ynab {
       note: explicit ? `Window: ${sinceDate} → ${opts.untilDate ?? 'today'}.` : `No since_date given — the YNAB API defaults to the last 365 days (${sinceDate} → today). Pass since_date for older history.`,
     }
     if (opts.aggregate) return { effectiveWindow, total: all.length, aggregate: aggregateTxns(all, opts.aggregate) }
+    // The API returns ascending date order; newest-first is the useful default for "recent" questions.
+    all.sort((a, b) => (opts.sort === 'date_asc' ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date)))
     const limit = Math.min(opts.limit ?? 25, 200)
     const offset = opts.offset ?? 0
     const page = all.slice(offset, offset + limit)
