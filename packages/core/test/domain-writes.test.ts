@@ -107,6 +107,86 @@ describe('updateScheduled', () => {
   })
 })
 
+describe('non-undoable writes', () => {
+  it('createPayee journals a committed, not-undoable marker with an empty inverse', async () => {
+    const client = { request: vi.fn(async () => ({ payee: { id: 'p1', name: 'Landlord' } })) } as any
+    const y = new Ynab({ client, journal, allowWrites: true })
+    await y.createPayee('plan1', 'Landlord')
+    const entry = journal.popLastCommitted()!
+    expect(entry.undoable).toBe(false)
+    expect(entry.inverse).toEqual([])
+    expect(entry.description).toMatch(/Landlord/)
+    expect(entry.description).toMatch(/not undoable/i)
+  })
+  it('undoLast on a not-undoable entry returns the cannot-undo message without calling the client, then reaches the prior entry', async () => {
+    const client = { request: vi.fn(async () => ({ payee: { id: 'p1', name: 'Landlord' } })) } as any
+    const y = new Ynab({ client, journal, allowWrites: true })
+    const priorId = journal.begin('rename payee Bob → Alice', [{ kind: 'rename_payee', planId: 'plan1', payeeId: 'p0', name: 'Bob' }])
+    journal.commit(priorId)
+    await y.createPayee('plan1', 'Landlord')
+    client.request.mockClear()
+
+    const res: any = await y.undoLast()
+    expect(res.undone).toBeNull()
+    expect(res.message).toMatch(/cannot undo/i)
+    expect(res.message).toMatch(/undo_last again/i)
+    expect(client.request).not.toHaveBeenCalled()
+
+    const res2: any = await y.undoLast()
+    expect(res2.undone).toBe('rename payee Bob → Alice')
+    expect(client.request).toHaveBeenCalledWith('/plans/plan1/payees/p0', { method: 'PATCH', body: { payee: { name: 'Bob' } } })
+  })
+  it('createCategory, createAccount, and importTransactions also journal not-undoable markers', async () => {
+    const client = { request: vi.fn(async (path: string, opts: any) => {
+      if (path.endsWith('/categories')) return { category: { id: 'c1', name: 'Fun' } }
+      if (path.endsWith('/accounts')) return { account: { id: 'a1' } }
+      if (path.endsWith('/transactions/import')) return { transaction_ids: ['t1', 't2'] }
+      return {}
+    }) } as any
+    const y = new Ynab({ client, journal, allowWrites: true })
+    await y.createCategory('plan1', { name: 'Fun', groupId: 'g1' })
+    expect(journal.popLastCommitted()!.undoable).toBe(false)
+    await y.createAccount('plan1', { name: 'New Checking', type: 'checking', balance: 0 })
+    expect(journal.popLastCommitted()!.undoable).toBe(false)
+    await y.importTransactions('plan1')
+    expect(journal.popLastCommitted()!.undoable).toBe(false)
+  })
+})
+
+describe('undoLast cache invalidation', () => {
+  it('invalidates the cache for every distinct planId touched by the executed inverse ops', async () => {
+    const client = { request: vi.fn(async () => ({})) } as any
+    const cache = { invalidate: vi.fn() } as any
+    const y = new Ynab({ client, cache, journal, allowWrites: true })
+    const id = journal.begin('rename payee', [
+      { kind: 'rename_payee', planId: 'plan1', payeeId: 'p0', name: 'Bob' },
+      { kind: 'assign_budget', planId: 'plan2', month: '2026-07-01', categoryId: 'c1', budgetedMilli: 1000 },
+    ])
+    journal.commit(id)
+    await y.undoLast()
+    expect(cache.invalidate).toHaveBeenCalledWith('plan1')
+    expect(cache.invalidate).toHaveBeenCalledWith('plan2')
+    expect(cache.invalidate).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('deleteScheduled', () => {
+  it('carries payee_name and flag_color into the restore inverse, not just payee_id', async () => {
+    const client = { request: vi.fn(async (_path: string, opts: any) => {
+      if (opts?.method === 'DELETE') return {}
+      return { scheduled_transaction: {
+        id: 's1', account_id: 'a1', date_next: '2026-08-01', amount: -5000, frequency: 'monthly',
+        payee_id: 'pay1', payee_name: 'Landlord', category_id: 'c1', memo: 'rent', flag_color: 'red',
+      } }
+    }) } as any
+    const y = new Ynab({ client, journal, allowWrites: true })
+    await y.deleteScheduled('p1', 's1', { confirm: true })
+    const inverse: any = journal.popLastCommitted()!.inverse[0]
+    expect(inverse.kind).toBe('restore_scheduled')
+    expect(inverse.scheduled).toMatchObject({ payee_name: 'Landlord', flag_color: 'red' })
+  })
+})
+
 describe('createScheduled', () => {
   it('journals before the POST (journal-first) and leaves the entry uncommitted on failure', async () => {
     const client = { request: vi.fn(async () => { throw new Error('boom') }) } as any

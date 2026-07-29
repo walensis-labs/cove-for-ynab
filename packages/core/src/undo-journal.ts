@@ -13,7 +13,12 @@ export type InverseOp =
   | { kind: 'patch_scheduled'; planId: string; id: string; patch: Record<string, unknown> }
   | { kind: 'rename_payee'; planId: string; payeeId: string; name: string }
 
-export interface UndoEntry { id: string; at: string; description: string; committed: boolean; inverse: InverseOp[] }
+export interface UndoEntry {
+  id: string; at: string; description: string; committed: boolean; inverse: InverseOp[]
+  /** false for writes YNAB's API has no way to reverse (creates, imports). Absent/undefined means true —
+   *  this keeps journal files written before this field existed loading as fully undoable. */
+  undoable?: boolean
+}
 
 const CAP = 50
 
@@ -28,8 +33,9 @@ export class UndoJournal {
     mkdirSync(dirname(this.filePath), { recursive: true })
     writeFileSync(this.filePath, JSON.stringify({ entries: this.#entries }, null, 2))
   }
-  begin(description: string, inverse: InverseOp[]): string {
+  begin(description: string, inverse: InverseOp[], opts?: { undoable?: boolean }): string {
     const entry: UndoEntry = { id: randomUUID(), at: new Date().toISOString(), description, committed: false, inverse }
+    if (opts?.undoable === false) entry.undoable = false
     this.#entries.push(entry)
     if (this.#entries.length > CAP) this.#entries.splice(0, this.#entries.length - CAP)
     this.#flush()

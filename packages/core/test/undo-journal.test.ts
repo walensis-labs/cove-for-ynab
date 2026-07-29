@@ -39,4 +39,18 @@ describe('UndoJournal', () => {
     j.commit(id)
     expect(j.popLastCommitted()!.inverse).toHaveLength(1)
   })
+  it('begin defaults to undoable (field absent) for backward compatibility with existing journal files', () => {
+    const j = new UndoJournal(path)
+    const id = j.begin('normal write', [])
+    j.commit(id)
+    const raw = JSON.parse(readFileSync(path, 'utf8'))
+    expect('undoable' in raw.entries[0]).toBe(false)
+    expect(j.popLastCommitted()!.undoable).toBeUndefined()
+  })
+  it('begin accepts an options object marking an entry not undoable', () => {
+    const j = new UndoJournal(path)
+    const id = j.begin('create payee "X" (not undoable)', [], { undoable: false })
+    j.commit(id)
+    expect(j.popLastCommitted()!.undoable).toBe(false)
+  })
 })

@@ -80,4 +80,66 @@ describe('writes', () => {
     await y.deleteTransaction('p1', 't1', { confirm: true })
     expect(journal.popLastCommitted()!.inverse[0]!.kind).toBe('restore_transactions')
   })
+  it('delete of a split transaction restores its subtransactions, not a single uncategorized row', async () => {
+    const client = { request: vi.fn(async (_path: string, opts: any) => {
+      if (opts?.method === 'DELETE') return {}
+      return { transaction: apiTxn({
+        category_id: null,
+        subtransactions: [
+          { id: 'sub1', amount: -20000, category_id: 'c-groceries', memo: 'half', payee_id: 'pay1', deleted: false },
+          { id: 'sub2', amount: -25500, category_id: 'c-fun', memo: null, payee_id: null, deleted: false },
+          { id: 'sub3', amount: -1000, category_id: 'c-gone', memo: null, payee_id: null, deleted: true },
+        ],
+      }) }
+    }) } as any
+    const y = new Ynab({ client, journal, allowWrites: true })
+    await y.deleteTransaction('p1', 't1', { confirm: true })
+    const inverse: any = journal.popLastCommitted()!.inverse[0]
+    expect(inverse.kind).toBe('restore_transactions')
+    expect(inverse.transactions[0].category_id).toBeNull()
+    expect(inverse.transactions[0].subtransactions).toEqual([
+      { amount: -20000, category_id: 'c-groceries', memo: 'half', payee_id: 'pay1' },
+      { amount: -25500, category_id: 'c-fun', memo: null, payee_id: null },
+    ])
+  })
+})
+
+describe('updateTransactions undo fidelity', () => {
+  it('inverse is API wire form (snake_case, milliunits) and ignores undefined keys — the way the MCP tool layer passes them', async () => {
+    const priorTxn = apiTxn({ category_id: 'c-old', approved: false })
+    const client = { request: vi.fn(async (path: string, opts: any) => {
+      if (path.endsWith('/transactions/t1') && !opts?.method) return { transaction: priorTxn }
+      return { transactions: [] }
+    }) } as any
+    const y = new Ynab({ client, journal, allowWrites: true })
+    // Mirrors the MCP tool layer: every key present, most explicitly undefined.
+    await y.updateTransactions('p1', [{
+      id: 't1', date: undefined, amount: undefined, payeeId: undefined, payeeName: undefined,
+      categoryId: 'c-new', memo: undefined, cleared: undefined, approved: true, flagColor: undefined,
+    }])
+    const entry = journal.popLastCommitted()!
+    expect(entry.inverse).toEqual([{ kind: 'patch_transactions', planId: 'p1', updates: [{ id: 't1', category_id: 'c-old', approved: false }] }])
+
+    // Replaying that inverse via undoLast must PATCH exactly this API-form body.
+    const captured: any[] = []
+    const replayClient = { request: vi.fn(async (path: string, opts: any) => { captured.push({ path, opts }); return {} }) } as any
+    const replayJournal = new UndoJournal(join(mkdtempSync(join(tmpdir(), 'u-')), 'undo.json'))
+    const rid = replayJournal.begin(entry.description, entry.inverse)
+    replayJournal.commit(rid)
+    const y2 = new Ynab({ client: replayClient, journal: replayJournal, allowWrites: true })
+    await y2.undoLast()
+    expect(captured[0].path).toBe('/plans/p1/transactions')
+    expect(captured[0].opts).toMatchObject({ method: 'PATCH', body: { transactions: [{ id: 't1', category_id: 'c-old', approved: false }] } })
+  })
+  it('carries the prior amount in MILLIUNITS when amount was updated', async () => {
+    const priorTxn = apiTxn({ amount: -50000 })
+    const client = { request: vi.fn(async (path: string, opts: any) => {
+      if (path.endsWith('/transactions/t1') && !opts?.method) return { transaction: priorTxn }
+      return { transactions: [] }
+    }) } as any
+    const y = new Ynab({ client, journal, allowWrites: true })
+    await y.updateTransactions('p1', [{ id: 't1', amount: -45.5 }])
+    const entry = journal.popLastCommitted()!
+    expect(entry.inverse).toEqual([{ kind: 'patch_transactions', planId: 'p1', updates: [{ id: 't1', amount: -50000 }] }])
+  })
 })

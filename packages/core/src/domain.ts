@@ -221,10 +221,19 @@ export class Ynab {
     if (!opts.confirm) throw new ConfirmationRequiredError('Deleting a transaction')
     const full = await this.client.request<any>(`/plans/${planId}/transactions/${id}`)
     const t = full.transaction
-    const jid = this.journal?.begin(`delete transaction ${id} (${t.payee_name ?? 'no payee'} ${t.amount / 1000})`, [{ kind: 'restore_transactions', planId, transactions: [{
+    const restoreTxn: Record<string, unknown> = {
       account_id: t.account_id, date: t.date, amount: t.amount, payee_name: t.payee_name, category_id: t.category_id,
       memo: t.memo, cleared: t.cleared, approved: t.approved, flag_color: t.flag_color,
-    }] }])
+    }
+    if (t.subtransactions?.length) {
+      // A split transaction's inverse must recreate the split, not a single uncategorized row — the
+      // top-level category_id stays null (splits never carry their own category) and the subs go along.
+      restoreTxn.category_id = null
+      restoreTxn.subtransactions = t.subtransactions.filter((s: any) => !s.deleted).map((s: any) => ({
+        amount: s.amount, category_id: s.category_id, memo: s.memo, payee_id: s.payee_id,
+      }))
+    }
+    const jid = this.journal?.begin(`delete transaction ${id} (${t.payee_name ?? 'no payee'} ${t.amount / 1000})`, [{ kind: 'restore_transactions', planId, transactions: [restoreTxn] }])
     await this.client.request(`/plans/${planId}/transactions/${id}`, { method: 'DELETE' })
     if (jid) this.journal!.commit(jid)
     this.cache?.invalidate(planId)
@@ -234,8 +243,11 @@ export class Ynab {
   async importTransactions(planId: string) {
     this.assertWrites()
     const data = await this.client.request<any>(`/plans/${planId}/transactions/import`, { method: 'POST' })
+    const count = (data.transaction_ids ?? []).length
+    const jid = this.journal?.begin(`import ${count} transaction(s) (not undoable — YNAB's API has no way to reverse an import)`, [], { undoable: false })
+    if (jid) this.journal!.commit(jid)
     this.cache?.invalidate(planId)
-    return { importedCount: (data.transaction_ids ?? []).length }
+    return { importedCount: count }
   }
 
   async #getCategoryRaw(planId: string, categoryId: string): Promise<any> {
@@ -250,6 +262,8 @@ export class Ynab {
       groupId = g.category_group.id
     }
     const data = await this.client.request<any>(`/plans/${planId}/categories`, { method: 'POST', body: { category: { name: opts.name, category_group_id: groupId } } })
+    const jid = this.journal?.begin(`create category "${opts.name}" (not undoable — YNAB's API has no category delete)`, [], { undoable: false })
+    if (jid) this.journal!.commit(jid)
     this.cache?.invalidate(planId)
     return { id: data.category.id, name: data.category.name }
   }
@@ -335,6 +349,8 @@ export class Ynab {
   async createPayee(planId: string, name: string) {
     this.assertWrites()
     const data = await this.client.request<any>(`/plans/${planId}/payees`, { method: 'POST', body: { payee: { name } } })
+    const jid = this.journal?.begin(`create payee "${name}" (not undoable — YNAB's API has no payee delete)`, [], { undoable: false })
+    if (jid) this.journal!.commit(jid)
     this.cache?.invalidate(planId)
     return { id: data.payee.id, name: data.payee.name }
   }
@@ -342,6 +358,8 @@ export class Ynab {
   async createAccount(planId: string, opts: { name: string; type: 'checking' | 'savings' | 'cash' | 'creditCard' | 'otherAsset' | 'otherLiability'; balance: number }) {
     this.assertWrites()
     const data = await this.client.request<any>(`/plans/${planId}/accounts`, { method: 'POST', body: { account: { name: opts.name, type: opts.type, balance: dollarsToMilli(opts.balance) } } })
+    const jid = this.journal?.begin(`create account "${opts.name}" (not undoable — YNAB's API has no account delete)`, [], { undoable: false })
+    if (jid) this.journal!.commit(jid)
     this.cache?.invalidate(planId)
     return { id: data.account.id }
   }
@@ -392,7 +410,8 @@ export class Ynab {
     const prior = (await this.client.request<any>(`/plans/${planId}/scheduled_transactions/${id}`)).scheduled_transaction
     const jid = this.journal?.begin(`delete scheduled ${id}`, [{ kind: 'restore_scheduled', planId, scheduled: {
       account_id: prior.account_id, date: prior.date_next, amount: prior.amount, frequency: prior.frequency,
-      payee_id: prior.payee_id, category_id: prior.category_id, memo: prior.memo,
+      payee_id: prior.payee_id, payee_name: prior.payee_name, category_id: prior.category_id, memo: prior.memo,
+      flag_color: prior.flag_color,
     } }])
     await this.client.request(`/plans/${planId}/scheduled_transactions/${id}`, { method: 'DELETE' })
     if (jid) this.journal!.commit(jid)
@@ -404,6 +423,10 @@ export class Ynab {
     this.assertWrites()
     const entry = this.journal?.popLastCommitted()
     if (!entry) return { undone: null, message: 'Nothing to undo — the undo journal is empty.' }
+    if (entry.undoable === false) {
+      return { undone: null, message: `Cannot undo "${entry.description}" — YNAB's API has no way to reverse it. ` +
+        `Its journal entry has been cleared; run undo_last again to undo the write before it.` }
+    }
     let actions = 0
     try {
       for (const op of entry.inverse) {
@@ -456,6 +479,9 @@ export class Ynab {
       throw new Error(`undo failed after completing ${actions} action(s); the entry has been re-journaled — ` +
         `run undo_last again to retry (${(e as Error).message})`)
     }
+    // Undo is itself a write: invalidate the cache for every plan the executed inverse ops touched,
+    // the same as every other write path does.
+    for (const planId of new Set(entry.inverse.map((op) => op.planId))) this.cache?.invalidate(planId)
     return { undone: entry.description, actions }
   }
 
