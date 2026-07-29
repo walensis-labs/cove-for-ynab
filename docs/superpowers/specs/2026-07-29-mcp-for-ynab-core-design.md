@@ -29,11 +29,11 @@ Build the best YNAB MCP server: full-coverage, token-efficient, safe-by-default,
 
 ## Identity
 
-- GitHub: `walensis/mcp-for-ynab` (public, MIT)
-- npm: `@walensis/mcp-for-ynab` (stdio server), `@walensis/mcp-for-ynab-core` (pure logic)
-- MCP registry: `io.github.walensis/mcp-for-ynab`
+- GitHub: `walensis-labs/mcp-for-ynab` (public, MIT) — org created 2026-07-29 (`walensis` was taken)
+- npm: `@walensis/mcp-for-ynab` (stdio server), `@walensis/mcp-for-ynab-core` (pure logic) — clean scope kept for the user-facing install name
+- MCP registry: `io.github.walensis-labs/mcp-for-ynab` (namespace derives from the GitHub org)
 - Working dir: `~/develop/mcp-for-ynab`
-- One-time setup owed: create `walensis` GitHub org (web-only) and npm org; configure trusted publishing/OIDC for the new scope. Known suite gotchas apply (server.json synced from package.json immediately before registry publish; never pre-publish a dangling version).
+- One-time setup owed: create npm org for the `@walensis` scope; configure trusted publishing/OIDC for the new scope. Known suite gotchas apply (server.json synced from package.json immediately before registry publish; never pre-publish a dangling version).
 
 ## Architecture
 
@@ -45,7 +45,7 @@ packages/core   @walensis/mcp-for-ynab-core — API client, domain logic, aggreg
 apps/mcp        @walensis/mcp-for-ynab — stdio MCP server over core. Ships .mcpb.
 ```
 
-The core/apps seam is the future hosted seam: a Cloudflare Worker (private cloud repo under walensis) imports core, adds OAuth + scheduling. No worker ships in v1.
+The core/apps seam is the future hosted seam: a Cloudflare Worker (private cloud repo under walensis-labs) imports core, adds OAuth + scheduling. No worker ships in v1.
 
 **API client is generated from YNAB's pinned OpenAPI spec** (`openapi-typescript` + typed fetch wrapper), not the official `ynab` SDK — the SDK lags 2026 endpoints (money movements, goal writes) and still uses legacy `/budgets` naming. We target `/plans/...` paths. The spec file is vendored + pinned; a CI job diffs against upstream to flag API changes.
 
