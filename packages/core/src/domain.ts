@@ -219,4 +219,191 @@ export class Ynab {
     this.cache?.invalidate(planId)
     return { importedCount: (data.transaction_ids ?? []).length }
   }
+
+  async #getCategoryRaw(planId: string, categoryId: string): Promise<any> {
+    return (await this.client.request<any>(`/plans/${planId}/categories/${categoryId}`)).category
+  }
+
+  async createCategory(planId: string, opts: { name: string; groupId?: string; groupName?: string }) {
+    this.assertWrites()
+    let groupId = opts.groupId
+    if (!groupId && opts.groupName) {
+      const g = await this.client.request<any>(`/plans/${planId}/categories/groups`, { method: 'POST', body: { category_group: { name: opts.groupName } } })
+      groupId = g.category_group.id
+    }
+    const data = await this.client.request<any>(`/plans/${planId}/categories`, { method: 'POST', body: { category: { name: opts.name, category_group_id: groupId } } })
+    this.cache?.invalidate(planId)
+    return { id: data.category.id, name: data.category.name }
+  }
+
+  async updateCategory(planId: string, categoryId: string, patch: { name?: string; hidden?: boolean; goalTarget?: number | null; goalTargetDate?: string | null; goalFrequency?: 'monthly' | 'weekly' | 'yearly' | null; goalNeedsWholeAmount?: boolean | null }) {
+    this.assertWrites()
+    const prior = await this.#getCategoryRaw(planId, categoryId)
+    const body: Record<string, unknown> = {}
+    if (patch.name !== undefined) body.name = patch.name
+    if (patch.hidden !== undefined) body.hidden = patch.hidden
+    if (patch.goalTarget !== undefined) body.goal_target = patch.goalTarget === null ? null : dollarsToMilli(patch.goalTarget)
+    if (patch.goalTargetDate !== undefined) body.goal_target_date = patch.goalTargetDate
+    if (patch.goalFrequency !== undefined) body.goal_frequency = patch.goalFrequency
+    if (patch.goalNeedsWholeAmount !== undefined) body.goal_needs_whole_amount = patch.goalNeedsWholeAmount
+    const inversePatch: Record<string, unknown> = {}
+    for (const k of Object.keys(body)) inversePatch[k] = prior[k] ?? null
+    const jid = this.journal?.begin(`update category ${prior.name}`, [{ kind: 'patch_category', planId, categoryId, patch: inversePatch }])
+    await this.client.request(`/plans/${planId}/categories/${categoryId}`, { method: 'PATCH', body: { category: body } })
+    if (jid) this.journal!.commit(jid)
+    this.cache?.invalidate(planId)
+    return { updated: categoryId }
+  }
+
+  async #patchMonthCategory(planId: string, month: string, categoryId: string, budgetedMilli: number): Promise<any> {
+    return this.client.request<any>(`/plans/${planId}/months/${month}/categories/${categoryId}`, { method: 'PATCH', body: { category: { budgeted: budgetedMilli } } })
+  }
+
+  async assignBudget(planId: string, month: string, categoryId: string, amount: number) {
+    this.assertWrites()
+    const prior = (await this.client.request<any>(`/plans/${planId}/months/${month}/categories/${categoryId}`)).category
+    const jid = this.journal?.begin(`assign ${amount} to category in ${month}`, [{ kind: 'assign_budget', planId, month, categoryId, budgetedMilli: prior.budgeted }])
+    await this.#patchMonthCategory(planId, month, categoryId, dollarsToMilli(amount))
+    if (jid) this.journal!.commit(jid)
+    this.cache?.invalidate(planId)
+    return { month, categoryId, assigned: amount }
+  }
+
+  async moveMoney(planId: string, month: string, fromCategoryId: string, toCategoryId: string, amount: number) {
+    this.assertWrites()
+    const [from, to] = await Promise.all([
+      this.client.request<any>(`/plans/${planId}/months/${month}/categories/${fromCategoryId}`),
+      this.client.request<any>(`/plans/${planId}/months/${month}/categories/${toCategoryId}`),
+    ])
+    const fromPrior = from.category.budgeted as number
+    const toPrior = to.category.budgeted as number
+    const milli = dollarsToMilli(amount)
+    const jid = this.journal?.begin(`move ${amount} between categories in ${month}`, [
+      { kind: 'assign_budget', planId, month, categoryId: fromCategoryId, budgetedMilli: fromPrior },
+      { kind: 'assign_budget', planId, month, categoryId: toCategoryId, budgetedMilli: toPrior },
+    ])
+    await this.#patchMonthCategory(planId, month, fromCategoryId, fromPrior - milli)
+    try {
+      await this.#patchMonthCategory(planId, month, toCategoryId, toPrior + milli)
+    } catch (e) {
+      await this.#patchMonthCategory(planId, month, fromCategoryId, fromPrior) // rollback
+      throw new Error(`${(e as Error).message} — the first half of the move was rolled back; no money moved.`)
+    }
+    if (jid) this.journal!.commit(jid)
+    this.cache?.invalidate(planId)
+    return { moved: amount, from: { id: fromCategoryId, assigned: milliToDollars(fromPrior - milli) }, to: { id: toCategoryId, assigned: milliToDollars(toPrior + milli) } }
+  }
+
+  async renamePayee(planId: string, payeeId: string, name: string) {
+    this.assertWrites()
+    const prior = (await this.client.request<any>(`/plans/${planId}/payees/${payeeId}`)).payee
+    const jid = this.journal?.begin(`rename payee ${prior.name} → ${name}`, [{ kind: 'rename_payee', planId, payeeId, name: prior.name }])
+    await this.client.request(`/plans/${planId}/payees/${payeeId}`, { method: 'PATCH', body: { payee: { name } } })
+    if (jid) this.journal!.commit(jid)
+    this.cache?.invalidate(planId)
+    return { renamed: payeeId }
+  }
+
+  async createPayee(planId: string, name: string) {
+    this.assertWrites()
+    const data = await this.client.request<any>(`/plans/${planId}/payees`, { method: 'POST', body: { payee: { name } } })
+    this.cache?.invalidate(planId)
+    return { id: data.payee.id, name: data.payee.name }
+  }
+
+  async createAccount(planId: string, opts: { name: string; type: 'checking' | 'savings' | 'cash' | 'creditCard' | 'otherAsset' | 'otherLiability'; balance: number }) {
+    this.assertWrites()
+    const data = await this.client.request<any>(`/plans/${planId}/accounts`, { method: 'POST', body: { account: { name: opts.name, type: opts.type, balance: dollarsToMilli(opts.balance) } } })
+    this.cache?.invalidate(planId)
+    return { id: data.account.id }
+  }
+
+  async createScheduled(planId: string, t: { accountId: string; date: string; amount: number; frequency: string; payeeName?: string; payeeId?: string; categoryId?: string; memo?: string }) {
+    this.assertWrites()
+    const data = await this.client.request<any>(`/plans/${planId}/scheduled_transactions`, { method: 'POST', body: { scheduled_transaction: { account_id: t.accountId, date: t.date, amount: dollarsToMilli(t.amount), frequency: t.frequency, payee_name: t.payeeName, payee_id: t.payeeId, category_id: t.categoryId, memo: t.memo } } })
+    const id = data.scheduled_transaction.id
+    const jid = this.journal?.begin(`create scheduled transaction`, [{ kind: 'delete_scheduled', planId, id }])
+    if (jid) this.journal!.commit(jid)
+    this.cache?.invalidate(planId)
+    return { id }
+  }
+
+  async updateScheduled(planId: string, id: string, patch: Record<string, unknown>) {
+    this.assertWrites()
+    const prior = (await this.client.request<any>(`/plans/${planId}/scheduled_transactions/${id}`)).scheduled_transaction
+    const body: Record<string, unknown> = { ...patch }
+    if (typeof body.amount === 'number') body.amount = dollarsToMilli(body.amount as number)
+    const inverse: Record<string, unknown> = {}
+    for (const k of Object.keys(body)) inverse[k] = prior[k] ?? null
+    const jid = this.journal?.begin(`update scheduled ${id}`, [{ kind: 'patch_scheduled', planId, id, patch: inverse }])
+    // PUT requires the full writable object; the GET response also carries read-only fields
+    // (id, date_next, payee_name, ...) that must not be echoed back — build from the writable subset only.
+    const writable: Record<string, unknown> = {
+      account_id: prior.account_id,
+      date: prior.date ?? prior.date_next,
+      amount: prior.amount,
+      frequency: prior.frequency,
+      payee_id: prior.payee_id,
+      category_id: prior.category_id,
+      memo: prior.memo,
+      flag_color: prior.flag_color,
+    }
+    await this.client.request(`/plans/${planId}/scheduled_transactions/${id}`, { method: 'PUT', body: { scheduled_transaction: { ...writable, ...body } } })
+    if (jid) this.journal!.commit(jid)
+    this.cache?.invalidate(planId)
+    return { updated: id }
+  }
+
+  async deleteScheduled(planId: string, id: string, opts: { confirm?: boolean } = {}) {
+    this.assertWrites()
+    if (!opts.confirm) throw new ConfirmationRequiredError('Deleting a scheduled transaction')
+    const prior = (await this.client.request<any>(`/plans/${planId}/scheduled_transactions/${id}`)).scheduled_transaction
+    const jid = this.journal?.begin(`delete scheduled ${id}`, [{ kind: 'restore_scheduled', planId, scheduled: {
+      account_id: prior.account_id, date: prior.date_next, amount: prior.amount, frequency: prior.frequency,
+      payee_id: prior.payee_id, category_id: prior.category_id, memo: prior.memo,
+    } }])
+    await this.client.request(`/plans/${planId}/scheduled_transactions/${id}`, { method: 'DELETE' })
+    if (jid) this.journal!.commit(jid)
+    this.cache?.invalidate(planId)
+    return { deleted: id }
+  }
+
+  async undoLast(): Promise<{ undone: string; actions: number } | { undone: null; message: string }> {
+    this.assertWrites()
+    const entry = this.journal?.popLastCommitted()
+    if (!entry) return { undone: null, message: 'Nothing to undo — the undo journal is empty.' }
+    let actions = 0
+    for (const op of entry.inverse) {
+      switch (op.kind) {
+        case 'delete_transactions':
+          for (const id of op.ids) { await this.client.request(`/plans/${op.planId}/transactions/${id}`, { method: 'DELETE' }); actions++ }
+          break
+        case 'restore_transactions':
+          await this.client.request(`/plans/${op.planId}/transactions`, { method: 'POST', body: { transactions: op.transactions } }); actions++
+          break
+        case 'patch_transactions':
+          await this.client.request(`/plans/${op.planId}/transactions`, { method: 'PATCH', body: { transactions: op.updates } }); actions++
+          break
+        case 'patch_category':
+          await this.client.request(`/plans/${op.planId}/categories/${op.categoryId}`, { method: 'PATCH', body: { category: op.patch } }); actions++
+          break
+        case 'assign_budget':
+          await this.#patchMonthCategory(op.planId, op.month, op.categoryId, op.budgetedMilli); actions++
+          break
+        case 'delete_scheduled':
+          await this.client.request(`/plans/${op.planId}/scheduled_transactions/${op.id}`, { method: 'DELETE' }); actions++
+          break
+        case 'restore_scheduled':
+          await this.client.request(`/plans/${op.planId}/scheduled_transactions`, { method: 'POST', body: { scheduled_transaction: op.scheduled } }); actions++
+          break
+        case 'patch_scheduled':
+          await this.client.request(`/plans/${op.planId}/scheduled_transactions/${op.id}`, { method: 'PUT', body: { scheduled_transaction: op.patch } }); actions++
+          break
+        case 'rename_payee':
+          await this.client.request(`/plans/${op.planId}/payees/${op.payeeId}`, { method: 'PATCH', body: { payee: { name: op.name } } }); actions++
+          break
+      }
+    }
+    return { undone: entry.description, actions }
+  }
 }
