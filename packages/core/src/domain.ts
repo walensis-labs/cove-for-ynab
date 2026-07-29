@@ -3,6 +3,7 @@ import { DeltaCache } from './delta-cache.js'
 import { UndoJournal, type InverseOp } from './undo-journal.js'
 import { milliToDollars, dollarsToMilli } from './money.js'
 import { applyFilters, aggregateTxns, type TxnFilters } from './filters.js'
+import { spendingSummary, budgetHealth, detectRecurring, incomeVsExpense, netWorthHistory } from './analytics.js'
 import type { CategorySnapshot, ScheduledSnapshot, Txn } from './types.js'
 
 const d = milliToDollars
@@ -439,5 +440,45 @@ export class Ynab {
         `run undo_last again to retry (${(e as Error).message})`)
     }
     return { undone: entry.description, actions }
+  }
+
+  async #allTxns(planId: string, sinceDate: string, untilDate?: string): Promise<Txn[]> {
+    const data = await this.client.request<any>(`/plans/${planId}/transactions`, { query: { since_date: sinceDate, until_date: untilDate } })
+    return data.transactions.filter((t: any) => !t.deleted).map(mapTxn)
+  }
+  #nonTransfer(txns: Txn[]): Txn[] { return txns.filter((t) => t.transferAccountId === null) }
+
+  async getSpendingSummary(planId: string, opts: { by?: 'category' | 'payee'; sinceDate?: string; untilDate?: string; compareToPrevious?: boolean } = {}) {
+    const since = opts.sinceDate ?? new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10)
+    const until = opts.untilDate ?? new Date().toISOString().slice(0, 10)
+    const cur = this.#nonTransfer(await this.#allTxns(planId, since, until))
+    let compareTxns: Txn[] | undefined
+    if (opts.compareToPrevious) {
+      const span = Date.parse(until) - Date.parse(since)
+      const prevSince = new Date(Date.parse(since) - span - 86_400_000).toISOString().slice(0, 10)
+      const prevUntil = new Date(Date.parse(since) - 86_400_000).toISOString().slice(0, 10)
+      compareTxns = this.#nonTransfer(await this.#allTxns(planId, prevSince, prevUntil))
+    }
+    return { window: { since, until }, rows: spendingSummary(cur.filter((t) => t.amount < 0), { by: opts.by ?? 'category', compareTxns: compareTxns?.filter((t) => t.amount < 0) }) }
+  }
+
+  async getBudgetHealth(planId: string) {
+    const [month, accountsData] = await Promise.all([this.getMonth(planId, 'current'), this.client.request<any>(`/plans/${planId}/accounts`)])
+    const accounts = accountsData.accounts.filter((a: any) => !a.deleted && !a.closed).map((a: any) => ({ name: a.name, type: a.type, balance: milliToDollars(a.balance) }))
+    return budgetHealth({ readyToAssign: month.readyToAssign, categories: month.categories, accounts })
+  }
+
+  async getRecurringCharges(planId: string) {
+    return detectRecurring(await this.#allTxns(planId, new Date(Date.now() - 400 * 86_400_000).toISOString().slice(0, 10)))
+  }
+
+  async getIncomeVsExpense(planId: string, opts: { months?: number } = {}) {
+    const n = opts.months ?? 6
+    const since = new Date(Date.now() - n * 31 * 86_400_000).toISOString().slice(0, 10)
+    return incomeVsExpense(this.#nonTransfer(await this.#allTxns(planId, since)), new Date().toISOString().slice(0, 10))
+  }
+
+  async getNetWorthHistory(planId: string) {
+    return netWorthHistory(await this.#allTxns(planId, '2000-01-01'))
   }
 }
