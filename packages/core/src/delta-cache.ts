@@ -1,30 +1,29 @@
 interface Entry { serverKnowledge: number; items: Map<string, { id: string; deleted?: boolean }> }
 
 export class DeltaCache {
-  #store = new Map<string, Entry>()
-
-  #key(planId: string, resource: string): string {
-    return `${planId}:${resource}`
-  }
+  #store = new Map<string, Map<string, Entry>>()
 
   knowledge(planId: string, resource: string): number | undefined {
-    return this.#store.get(this.#key(planId, resource))?.serverKnowledge
+    return this.#store.get(planId)?.get(resource)?.serverKnowledge
   }
 
   merge<T extends { id: string; deleted?: boolean }>(planId: string, resource: string, serverKnowledge: number, incoming: T[]): T[] {
-    const key = this.#key(planId, resource)
-    const entry = this.#store.get(key) ?? { serverKnowledge, items: new Map() }
+    let planMap = this.#store.get(planId)
+    if (!planMap) {
+      planMap = new Map()
+      this.#store.set(planId, planMap)
+    }
+    const entry = planMap.get(resource) ?? { serverKnowledge, items: new Map() }
     entry.serverKnowledge = serverKnowledge
     for (const item of incoming) {
       if (item.deleted) entry.items.delete(item.id)
       else entry.items.set(item.id, item)
     }
-    this.#store.set(key, entry)
+    planMap.set(resource, entry)
     return [...entry.items.values()] as T[]
   }
 
   invalidate(planId: string): void {
-    const prefix = `${planId}:`
-    for (const k of [...this.#store.keys()]) if (k.startsWith(prefix)) this.#store.delete(k)
+    this.#store.delete(planId)
   }
 }
