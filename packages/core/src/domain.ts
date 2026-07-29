@@ -58,6 +58,13 @@ export function mapTxn(t: any): Txn {
   }
 }
 
+// Maps the camelCase keys accepted by updateTransactions to the snake_case keys the YNAB API expects,
+// used to build undo inverses in API wire form (see updateTransactions).
+const TXN_UPDATE_API_KEY: Record<string, string> = {
+  date: 'date', amount: 'amount', payeeId: 'payee_id', payeeName: 'payee_name',
+  categoryId: 'category_id', memo: 'memo', cleared: 'cleared', approved: 'approved', flagColor: 'flag_color',
+}
+
 export class Ynab {
   readonly client: YnabClient
   readonly cache?: DeltaCache
@@ -187,9 +194,19 @@ export class Ynab {
       if (opts.expectedCount !== updates.length) throw new Error(`expected_count (${opts.expectedCount}) does not match the ${updates.length} rows provided — aborting; re-check the update set.`)
     }
     const prior = await Promise.all(updates.map((u) => this.getTransaction(planId, u.id)))
+    // The inverse must be in API wire form (snake_case, milliunits): undoLast PATCHes it straight
+    // through to the API, unlike `prior` which is the camelCase/dollars Txn shape from getTransaction.
+    // Keys whose update value is undefined (the MCP tool layer sends all fields, most undefined) are
+    // skipped — they weren't actually changed, so they don't belong in the inverse.
     const inverse: InverseOp[] = [{ kind: 'patch_transactions', planId, updates: prior.map((p, i) => {
       const changed: Record<string, unknown> = { id: p.id }
-      for (const k of Object.keys(updates[i]!)) if (k !== 'id') changed[k] = (p as any)[k] ?? null
+      for (const k of Object.keys(updates[i]!)) {
+        if (k === 'id' || (updates[i] as any)[k] === undefined) continue
+        const apiKey = TXN_UPDATE_API_KEY[k]
+        if (!apiKey) continue
+        const priorVal = (p as any)[k]
+        changed[apiKey] = k === 'amount' ? dollarsToMilli(priorVal as number) : priorVal ?? null
+      }
       return changed
     }) }]
     const jid = this.journal?.begin(`update ${updates.length} transaction(s)`, inverse)
