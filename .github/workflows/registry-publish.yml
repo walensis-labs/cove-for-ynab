@@ -1,0 +1,18 @@
+name: MCP Registry Publish
+on: workflow_dispatch
+permissions: { id-token: write, contents: read }
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sync server.json version from package.json
+        run: |
+          VERSION=$(node -p "require('./apps/mcp/package.json').version")
+          node -e "const f='apps/mcp/server.json';const s=require('./'+f);s.version='$VERSION';s.packages[0].version='$VERSION';require('fs').writeFileSync(f,JSON.stringify(s,null,2))"
+      - name: Install mcp-publisher
+        run: curl -fsSL https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz | tar xz
+      - name: Login (GitHub OIDC)
+        run: ./mcp-publisher login github-oidc
+      - name: Publish
+        run: cd apps/mcp && ../../mcp-publisher publish
