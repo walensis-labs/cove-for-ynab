@@ -53,4 +53,72 @@ describe('Ynab reads', () => {
     expect(calls).toEqual([undefined, 10])
     expect(second).toEqual([{ id: 'a', name: 'Kroger', transferAccountId: null }])
   })
+  it('listCategories excludes hidden/deleted groups but keeps individually-hidden categories', async () => {
+    const client = fakeClient({
+      '/plans/p1/categories': () => ({
+        category_groups: [
+          {
+            id: 'gA', name: 'A', hidden: false, deleted: false,
+            categories: [
+              { id: 'c1', name: 'Normal', hidden: false, deleted: false, budgeted: 100000, activity: -50000, balance: 50000, goal_type: null, goal_target: 0, goal_under_funded: null, goal_percentage_complete: null },
+              { id: 'c2', name: 'HiddenCat', hidden: true, deleted: false, budgeted: 0, activity: 0, balance: 0, goal_type: null, goal_target: 0, goal_under_funded: null, goal_percentage_complete: null },
+              { id: 'c3', name: 'DeletedCat', hidden: false, deleted: true, budgeted: 0, activity: 0, balance: 0, goal_type: null, goal_target: 0, goal_under_funded: null, goal_percentage_complete: null },
+            ],
+          },
+          {
+            id: 'gB', name: 'B', hidden: true, deleted: false,
+            categories: [
+              { id: 'c4', name: 'InHiddenGroup', hidden: false, deleted: false, budgeted: 0, activity: 0, balance: 0, goal_type: null, goal_target: 0, goal_under_funded: null, goal_percentage_complete: null },
+            ],
+          },
+        ],
+      }),
+    })
+    const y = new Ynab({ client, allowWrites: false })
+    const cats = await y.listCategories('p1')
+    expect(cats.map((c) => c.id)).toEqual(['c1', 'c2'])
+    expect(cats.every((c) => c.group === 'A')).toBe(true)
+    expect(cats.find((c) => c.id === 'c2')).toMatchObject({ name: 'HiddenCat', hidden: true })
+  })
+  it('getPlanOverview aggregates accounts and category groups with dollar rounding', async () => {
+    const client = fakeClient({
+      '/plans': () => ({ plans: [{ id: 'p1', name: 'Family', last_modified_on: '2026-07-01T00:00:00Z', currency_format: { iso_code: 'USD' } }] }),
+      '/plans/p1/accounts': () => ({
+        accounts: [
+          { id: 'a1', name: 'Checking', type: 'checking', on_budget: true, balance: 1234560, cleared_balance: 1000000, uncleared_balance: 234560, last_reconciled_at: null, deleted: false, closed: false },
+          { id: 'a2', name: 'ClosedAcct', type: 'checking', on_budget: true, balance: 0, cleared_balance: 0, uncleared_balance: 0, last_reconciled_at: null, deleted: false, closed: true },
+          { id: 'a3', name: 'DeletedAcct', type: 'checking', on_budget: true, balance: 0, cleared_balance: 0, uncleared_balance: 0, last_reconciled_at: null, deleted: true, closed: false },
+        ],
+      }),
+      '/plans/p1/months/current': () => monthFixture,
+    })
+    const y = new Ynab({ client, allowWrites: false })
+    const overview = await y.getPlanOverview('p1')
+    expect(overview.plan).toEqual({ id: 'p1', name: 'Family', currency: 'USD' })
+    expect(overview.accounts).toEqual([
+      { id: 'a1', name: 'Checking', type: 'checking', onBudget: true, balance: 1234.56, cleared: 1000, uncleared: 234.56, lastReconciledAt: null },
+    ])
+    expect(overview.month.readyToAssign).toBe(150.25)
+    expect(overview.month.budgeted).toBe(1700)
+    expect(overview.month.activity).toBe(-1655.5)
+    expect(overview.categoryGroups).toEqual([
+      { name: 'Bills', assigned: 1500, activity: -1500, available: 0 },
+      { name: 'Fun', assigned: 200, activity: -155.5, available: 44.5 },
+    ])
+  })
+  it('listScheduled converts amounts and excludes deleted', async () => {
+    const client = fakeClient({
+      '/plans/p1/scheduled_transactions': () => ({
+        scheduled_transactions: [
+          { id: 's1', date_next: '2026-08-01', frequency: 'monthly', amount: -45500, payee_name: 'Landlord', category_name: 'Rent', memo: 'August rent', deleted: false },
+          { id: 's2', date_next: '2026-08-05', frequency: 'weekly', amount: -1000, payee_name: 'X', category_name: 'Y', memo: null, deleted: true },
+        ],
+      }),
+    })
+    const y = new Ynab({ client, allowWrites: false })
+    const scheduled = await y.listScheduled('p1')
+    expect(scheduled).toEqual([
+      { id: 's1', dateNext: '2026-08-01', frequency: 'monthly', amount: -45.5, payeeName: 'Landlord', categoryName: 'Rent', memo: 'August rent' },
+    ])
+  })
 })
