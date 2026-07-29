@@ -2049,7 +2049,9 @@ console.error(`mcp-for-ynab ready (writes ${allowWrites ? 'ENABLED' : 'disabled 
 - [ ] **Step 6: Full build + typecheck** — `pnpm build && pnpm typecheck` → clean.
 - [ ] **Step 7: Commit** — `git commit -am "feat(mcp): 28-tool MCP server, read-only default, stdio entry"`
 
----### Task 12: README, privacy note, live smoke script, .mcpb manifest, server.json
+---
+
+### Task 12: README, privacy note, live smoke script, .mcpb manifest, server.json
 
 **Files:**
 - Create: `README.md`, `PRIVACY.md`, `scripts/smoke.ts`, `apps/mcp/manifest.json` (mcpb), `apps/mcp/server.json` (MCP registry), root `package.json` script `smoke`
