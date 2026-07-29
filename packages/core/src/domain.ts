@@ -286,7 +286,17 @@ export class Ynab {
     try {
       await this.#patchMonthCategory(planId, month, toCategoryId, toPrior + milli)
     } catch (e) {
-      await this.#patchMonthCategory(planId, month, fromCategoryId, fromPrior) // rollback
+      try {
+        await this.#patchMonthCategory(planId, month, fromCategoryId, fromPrior) // rollback
+      } catch (rollbackErr) {
+        // Rollback itself failed: the move is now half-applied (money left fromCategoryId but never
+        // reached toCategoryId). Commit the journal entry — its two assign_budget inverses are exactly
+        // the repair needed — so undo_last can restore both categories.
+        if (jid) this.journal!.commit(jid)
+        this.cache?.invalidate(planId)
+        throw new Error(`${(e as Error).message}; rollback also failed: ${(rollbackErr as Error).message} — ` +
+          `the move is half-applied; run undo_last to restore both categories.`)
+      }
       throw new Error(`${(e as Error).message} — the first half of the move was rolled back; no money moved.`)
     }
     if (jid) this.journal!.commit(jid)
@@ -320,10 +330,13 @@ export class Ynab {
 
   async createScheduled(planId: string, t: { accountId: string; date: string; amount: number; frequency: string; payeeName?: string; payeeId?: string; categoryId?: string; memo?: string }) {
     this.assertWrites()
+    const jid = this.journal?.begin(`create scheduled transaction`, [])
     const data = await this.client.request<any>(`/plans/${planId}/scheduled_transactions`, { method: 'POST', body: { scheduled_transaction: { account_id: t.accountId, date: t.date, amount: dollarsToMilli(t.amount), frequency: t.frequency, payee_name: t.payeeName, payee_id: t.payeeId, category_id: t.categoryId, memo: t.memo } } })
     const id = data.scheduled_transaction.id
-    const jid = this.journal?.begin(`create scheduled transaction`, [{ kind: 'delete_scheduled', planId, id }])
-    if (jid) this.journal!.commit(jid)
+    if (this.journal && jid) {
+      this.journal.setInverse(jid, [{ kind: 'delete_scheduled', planId, id }])
+      this.journal.commit(jid)
+    }
     this.cache?.invalidate(planId)
     return { id }
   }
@@ -333,11 +346,11 @@ export class Ynab {
     const prior = (await this.client.request<any>(`/plans/${planId}/scheduled_transactions/${id}`)).scheduled_transaction
     const body: Record<string, unknown> = { ...patch }
     if (typeof body.amount === 'number') body.amount = dollarsToMilli(body.amount as number)
-    const inverse: Record<string, unknown> = {}
-    for (const k of Object.keys(body)) inverse[k] = prior[k] ?? null
-    const jid = this.journal?.begin(`update scheduled ${id}`, [{ kind: 'patch_scheduled', planId, id, patch: inverse }])
     // PUT requires the full writable object; the GET response also carries read-only fields
     // (id, date_next, payee_name, ...) that must not be echoed back — build from the writable subset only.
+    // The inverse must be this SAME full snapshot regardless of which keys changed: YNAB's PUT requires
+    // account_id + date at minimum, so an inverse containing only the changed keys (e.g. just `memo`)
+    // would 400 when undoLast replays it.
     const writable: Record<string, unknown> = {
       account_id: prior.account_id,
       date: prior.date ?? prior.date_next,
@@ -348,6 +361,7 @@ export class Ynab {
       memo: prior.memo,
       flag_color: prior.flag_color,
     }
+    const jid = this.journal?.begin(`update scheduled ${id}`, [{ kind: 'patch_scheduled', planId, id, patch: writable }])
     await this.client.request(`/plans/${planId}/scheduled_transactions/${id}`, { method: 'PUT', body: { scheduled_transaction: { ...writable, ...body } } })
     if (jid) this.journal!.commit(jid)
     this.cache?.invalidate(planId)
@@ -373,36 +387,47 @@ export class Ynab {
     const entry = this.journal?.popLastCommitted()
     if (!entry) return { undone: null, message: 'Nothing to undo — the undo journal is empty.' }
     let actions = 0
-    for (const op of entry.inverse) {
-      switch (op.kind) {
-        case 'delete_transactions':
-          for (const id of op.ids) { await this.client.request(`/plans/${op.planId}/transactions/${id}`, { method: 'DELETE' }); actions++ }
-          break
-        case 'restore_transactions':
-          await this.client.request(`/plans/${op.planId}/transactions`, { method: 'POST', body: { transactions: op.transactions } }); actions++
-          break
-        case 'patch_transactions':
-          await this.client.request(`/plans/${op.planId}/transactions`, { method: 'PATCH', body: { transactions: op.updates } }); actions++
-          break
-        case 'patch_category':
-          await this.client.request(`/plans/${op.planId}/categories/${op.categoryId}`, { method: 'PATCH', body: { category: op.patch } }); actions++
-          break
-        case 'assign_budget':
-          await this.#patchMonthCategory(op.planId, op.month, op.categoryId, op.budgetedMilli); actions++
-          break
-        case 'delete_scheduled':
-          await this.client.request(`/plans/${op.planId}/scheduled_transactions/${op.id}`, { method: 'DELETE' }); actions++
-          break
-        case 'restore_scheduled':
-          await this.client.request(`/plans/${op.planId}/scheduled_transactions`, { method: 'POST', body: { scheduled_transaction: op.scheduled } }); actions++
-          break
-        case 'patch_scheduled':
-          await this.client.request(`/plans/${op.planId}/scheduled_transactions/${op.id}`, { method: 'PUT', body: { scheduled_transaction: op.patch } }); actions++
-          break
-        case 'rename_payee':
-          await this.client.request(`/plans/${op.planId}/payees/${op.payeeId}`, { method: 'PATCH', body: { payee: { name: op.name } } }); actions++
-          break
+    try {
+      for (const op of entry.inverse) {
+        switch (op.kind) {
+          case 'delete_transactions':
+            for (const id of op.ids) { await this.client.request(`/plans/${op.planId}/transactions/${id}`, { method: 'DELETE' }); actions++ }
+            break
+          case 'restore_transactions':
+            await this.client.request(`/plans/${op.planId}/transactions`, { method: 'POST', body: { transactions: op.transactions } }); actions++
+            break
+          case 'patch_transactions':
+            await this.client.request(`/plans/${op.planId}/transactions`, { method: 'PATCH', body: { transactions: op.updates } }); actions++
+            break
+          case 'patch_category':
+            await this.client.request(`/plans/${op.planId}/categories/${op.categoryId}`, { method: 'PATCH', body: { category: op.patch } }); actions++
+            break
+          case 'assign_budget':
+            await this.#patchMonthCategory(op.planId, op.month, op.categoryId, op.budgetedMilli); actions++
+            break
+          case 'delete_scheduled':
+            await this.client.request(`/plans/${op.planId}/scheduled_transactions/${op.id}`, { method: 'DELETE' }); actions++
+            break
+          case 'restore_scheduled':
+            await this.client.request(`/plans/${op.planId}/scheduled_transactions`, { method: 'POST', body: { scheduled_transaction: op.scheduled } }); actions++
+            break
+          case 'patch_scheduled':
+            await this.client.request(`/plans/${op.planId}/scheduled_transactions/${op.id}`, { method: 'PUT', body: { scheduled_transaction: op.patch } }); actions++
+            break
+          case 'rename_payee':
+            await this.client.request(`/plans/${op.planId}/payees/${op.payeeId}`, { method: 'PATCH', body: { payee: { name: op.name } } }); actions++
+            break
+        }
       }
+    } catch (e) {
+      // Undo is destructive if we lose the record here: re-insert the popped entry so a failed
+      // undo remains available to retry, rather than silently vanishing from the journal.
+      if (this.journal) {
+        const rid = this.journal.begin(entry.description, entry.inverse)
+        this.journal.commit(rid)
+      }
+      throw new Error(`Undo failed after ${actions} of ${entry.inverse.length} action(s): ${(e as Error).message} — ` +
+        `the undo record remains in the journal; retry undo_last.`)
     }
     return { undone: entry.description, actions }
   }
