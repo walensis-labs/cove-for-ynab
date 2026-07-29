@@ -11,7 +11,9 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck && pnpm test && pnpm build
+      # build first: packages/core only exposes typed exports via dist/*.d.ts,
+      # so a fresh checkout can't typecheck/test apps/mcp against it otherwise.
+      - run: pnpm build && pnpm typecheck && pnpm test
   spec-drift:
     runs-on: ubuntu-latest
     steps:
