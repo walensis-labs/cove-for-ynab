@@ -2,7 +2,7 @@
 
 A fast, safe MCP server for YNAB — full budget access for Claude and other AI assistants, read-only by default.
 
-28 tools covering budgets, transactions, categories, payees, accounts, scheduled transactions, and server-computed analytics (spending summaries, budget health, recurring charges, income vs. expense, net worth). Writes are off unless you explicitly turn them on, risky writes require confirmation, and every write can be undone.
+28 tools covering budgets, transactions, categories, payees, accounts, scheduled transactions, and server-computed analytics (spending summaries, budget health, recurring charges, income vs. expense, net worth). Writes are off unless you explicitly turn them on, risky writes require confirmation, and writes that edit or delete existing data can be undone.
 
 ## Quickstart
 
@@ -64,7 +64,7 @@ YNAB_ALLOW_WRITES=1
 in the server's environment and restart it. With writes enabled:
 
 - **Confirmation gates**: destructive or bulk operations (deleting a transaction, deleting a scheduled transaction, bulk-updating more than 5 transactions) require an explicit `confirm: true` — and bulk updates also require `expected_count` to match the number of rows — so the assistant has to show you what it's about to do before it does it.
-- **Undo**: every write made through this server is journaled locally, and the `undo_last` tool reverses the most recent one (up to 50 writes of history, stored in `~/.mcp-for-ynab/undo.json`). See [PRIVACY.md](./PRIVACY.md) for details on that file.
+- **Undo**: writes that change existing data — transaction edits/deletes, category edits, budget assignments/moves, scheduled transaction edits/deletes, payee renames — are journaled locally, and the `undo_last` tool reverses the most recent one (up to 50 writes of history, stored in `~/.mcp-for-ynab/undo.json`). Writes that *create* something (`create_category`, `create_payee`, `create_account`) and `import_transactions` are **not** reversible — YNAB's API has no delete for categories, payees, or accounts, and no way to undo an import. Those are still journaled (so undo history stays in order), but `undo_last` will tell you a given entry can't be undone and move on to the write before it. See [PRIVACY.md](./PRIVACY.md) for details on that file.
 
 ## Rate limits
 
