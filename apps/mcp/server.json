@@ -1,0 +1,15 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "io.github.walensis-labs/mcp-for-ynab",
+  "description": "Full YNAB budget access for AI assistants — read-only by default, safe gated writes, undo, token-efficient analytics.",
+  "repository": { "url": "https://github.com/walensis-labs/mcp-for-ynab", "source": "github" },
+  "version": "0.1.0",
+  "packages": [{
+    "registry_type": "npm", "identifier": "@walensis/mcp-for-ynab", "version": "0.1.0",
+    "transport": { "type": "stdio" },
+    "environment_variables": [
+      { "name": "YNAB_ACCESS_TOKEN", "description": "YNAB Personal Access Token (app.ynab.com → Developer Settings)", "is_required": true, "is_secret": true },
+      { "name": "YNAB_ALLOW_WRITES", "description": "Set to 1 to enable write tools (off = read-only)", "is_required": false, "is_secret": false }
+    ]
+  }]
+}

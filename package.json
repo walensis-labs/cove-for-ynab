@@ -2,11 +2,23 @@
   "name": "mcp-for-ynab-workspace",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "pnpm -r build",
     "test": "pnpm -r test",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "smoke": "pnpm -F @walensis/mcp-for-ynab-core build && tsx scripts/smoke.ts"
   },
-  "devDependencies": { "typescript": "^5.5.0", "vitest": "^2.0.0", "tsup": "^8.0.0", "@types/node": "^20" }
+  "devDependencies": {
+    "@types/node": "^20",
+    "tsup": "^8.0.0",
+    "tsx": "^4.23.1",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  },
+  "dependencies": {
+    "@walensis/mcp-for-ynab-core": "workspace:*"
+  }
 }
