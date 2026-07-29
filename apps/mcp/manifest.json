@@ -10,6 +10,6 @@
   "server": { "type": "node", "entry_point": "dist/main.js", "mcp_config": { "command": "node", "args": ["${__dirname}/dist/main.js"], "env": { "YNAB_ACCESS_TOKEN": "${user_config.ynab_access_token}", "YNAB_ALLOW_WRITES": "${user_config.allow_writes}" } } },
   "user_config": {
     "ynab_access_token": { "type": "string", "title": "YNAB Personal Access Token", "description": "Create at app.ynab.com → Account Settings → Developer Settings", "sensitive": true, "required": true },
-    "allow_writes": { "type": "string", "title": "Allow writes (set to 1 to enable)", "default": "", "required": false }
+    "allow_writes": { "type": "string", "title": "Allow writes (set to 1 to enable)", "description": "Leave empty for read-only (recommended to start). Set to 1 to enable write tools — destructive operations still require per-call confirmation and are undoable via undo_last.", "default": "", "required": false }
   }
 }
