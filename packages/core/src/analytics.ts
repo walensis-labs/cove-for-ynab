@@ -60,6 +60,20 @@ export function detectRecurring(txns: Txn[]) {
   return out.sort((a, b) => a.lastAmount - b.lastAmount)
 }
 
+/**
+ * First day (UTC) of the month `months - 1` months before todayIso's month — i.e. the start of a
+ * window of `months` whole calendar months ending with (and including) the current, partial month.
+ * Pure and independently testable so getIncomeVsExpense doesn't hand incomeVsExpense a window that
+ * starts mid-month (which would silently truncate the oldest month without flagging it partial).
+ */
+export function monthWindowStart(todayIso: string, months: number): string {
+  const [y, m] = todayIso.slice(0, 7).split('-').map(Number) as [number, number]
+  const idx = y * 12 + (m - 1) - (months - 1) // zero-based (year*12 + month) index, may go negative
+  const yy = Math.floor(idx / 12)
+  const mm = idx - yy * 12 + 1
+  return `${yy}-${String(mm).padStart(2, '0')}-01`
+}
+
 export function incomeVsExpense(txns: Txn[], todayIso: string) {
   const months = new Map<string, { income: number; expense: number }>()
   for (const t of txns) {

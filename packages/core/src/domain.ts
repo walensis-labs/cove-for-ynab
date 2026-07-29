@@ -3,7 +3,7 @@ import { DeltaCache } from './delta-cache.js'
 import { UndoJournal, type InverseOp } from './undo-journal.js'
 import { milliToDollars, dollarsToMilli } from './money.js'
 import { applyFilters, aggregateTxns, type TxnFilters } from './filters.js'
-import { spendingSummary, budgetHealth, detectRecurring, incomeVsExpense, netWorthHistory } from './analytics.js'
+import { spendingSummary, budgetHealth, detectRecurring, incomeVsExpense, netWorthHistory, monthWindowStart } from './analytics.js'
 import type { CategorySnapshot, ScheduledSnapshot, Txn } from './types.js'
 
 const d = milliToDollars
@@ -517,8 +517,9 @@ export class Ynab {
 
   async getIncomeVsExpense(planId: string, opts: { months?: number } = {}) {
     const n = opts.months ?? 6
-    const since = new Date(Date.now() - n * 31 * 86_400_000).toISOString().slice(0, 10)
-    return incomeVsExpense(this.#nonTransfer(await this.#allTxns(planId, since)), new Date().toISOString().slice(0, 10))
+    const today = new Date().toISOString().slice(0, 10)
+    const since = monthWindowStart(today, n)
+    return incomeVsExpense(this.#nonTransfer(await this.#allTxns(planId, since)), today)
   }
 
   async getNetWorthHistory(planId: string) {

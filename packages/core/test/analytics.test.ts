@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { spendingSummary, budgetHealth, detectRecurring, incomeVsExpense, netWorthHistory } from '../src/analytics.js'
+import { spendingSummary, budgetHealth, detectRecurring, incomeVsExpense, netWorthHistory, monthWindowStart } from '../src/analytics.js'
 import type { Txn } from '../src/types.js'
 
 const t = (o: Partial<Txn>): Txn => ({
@@ -53,6 +53,18 @@ describe('incomeVsExpense', () => {
       { month: '2026-06', income: 3000, expense: -1200, net: 1800, partial: false },
       { month: '2026-07', income: 0, expense: -100, net: -100, partial: true },
     ])
+  })
+})
+
+describe('monthWindowStart', () => {
+  it('returns the 1st of the month (n-1) months before the current month', () => {
+    expect(monthWindowStart('2026-07-15', 6)).toBe('2026-02-01')
+  })
+  it('wraps across a year boundary', () => {
+    expect(monthWindowStart('2026-01-15', 6)).toBe('2025-08-01')
+  })
+  it('with months=1 the window starts at the 1st of the current month', () => {
+    expect(monthWindowStart('2026-07-15', 1)).toBe('2026-07-01')
   })
 })
 
