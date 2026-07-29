@@ -1,7 +1,8 @@
 import { YnabClient } from './client.js'
 import { DeltaCache } from './delta-cache.js'
-import { UndoJournal } from './undo-journal.js'
-import { milliToDollars } from './money.js'
+import { UndoJournal, type InverseOp } from './undo-journal.js'
+import { milliToDollars, dollarsToMilli } from './money.js'
+import { applyFilters, aggregateTxns, type TxnFilters } from './filters.js'
 import type { CategorySnapshot, ScheduledSnapshot, Txn } from './types.js'
 
 const d = milliToDollars
@@ -11,6 +12,23 @@ export class WriteDisabledError extends Error {
     super('Writes are disabled. This server runs read-only by default to protect your budget. ' +
       'To enable writes, set the environment variable YNAB_ALLOW_WRITES=1 in your MCP server config and restart.')
   }
+}
+
+export class ConfirmationRequiredError extends Error {
+  constructor(what: string) {
+    super(`${what} requires confirm: true${what.includes('Bulk') ? ' and expected_count matching the number of rows' : ''}. ` +
+      `Re-issue the call with confirmation after showing the user what will change.`)
+  }
+}
+
+const DAY = 86_400_000
+function defaultSince(): string { return new Date(Date.now() - 365 * DAY).toISOString().slice(0, 10) }
+
+export interface NewTxn {
+  accountId: string; date: string; amount: number
+  payeeName?: string; payeeId?: string; categoryId?: string; memo?: string
+  cleared?: 'cleared' | 'uncleared' | 'reconciled'; approved?: boolean; flagColor?: string; importId?: string
+  subtransactions?: { amount: number; categoryId?: string; memo?: string }[]
 }
 
 function mapCategory(c: any): CategorySnapshot {
@@ -115,5 +133,90 @@ export class Ynab {
       accounts,
       categoryGroups: [...groups.entries()].map(([name, v]) => ({ name, assigned: Math.round(v.assigned * 100) / 100, activity: Math.round(v.activity * 100) / 100, available: Math.round(v.available * 100) / 100 })),
     }
+  }
+
+  async listTransactions(planId: string, opts: TxnFilters & { limit?: number; offset?: number; fields?: (keyof Txn)[]; aggregate?: 'category' | 'payee' | 'month' } = {}) {
+    const sinceDate = opts.sinceDate ?? defaultSince()
+    const explicit = opts.sinceDate !== undefined
+    const sub = [opts.accountId && `accounts/${opts.accountId}`, opts.categoryId && `categories/${opts.categoryId}`, opts.payeeId && `payees/${opts.payeeId}`].filter(Boolean)
+    const path = sub.length === 1 ? `/plans/${planId}/${sub[0]}/transactions` : `/plans/${planId}/transactions`
+    const data = await this.client.request<any>(path, { query: { since_date: sinceDate, until_date: opts.untilDate, type: opts.unapprovedOnly ? 'unapproved' : opts.unclearedOnly ? 'uncleared' : undefined } })
+    const all = applyFilters(data.transactions.filter((t: any) => !t.deleted).map(mapTxn), { ...opts, sinceDate, ...(sub.length === 1 ? { accountId: undefined, categoryId: undefined, payeeId: undefined } : {}) } as any)
+    const effectiveWindow = {
+      sinceDate, untilDate: opts.untilDate ?? null,
+      note: explicit ? `Window: ${sinceDate} → ${opts.untilDate ?? 'today'}.` : `No since_date given — the YNAB API defaults to the last 365 days (${sinceDate} → today). Pass since_date for older history.`,
+    }
+    if (opts.aggregate) return { effectiveWindow, total: all.length, aggregate: aggregateTxns(all, opts.aggregate) }
+    const limit = Math.min(opts.limit ?? 25, 200)
+    const offset = opts.offset ?? 0
+    const page = all.slice(offset, offset + limit)
+    const rows = opts.fields?.length ? page.map((t) => Object.fromEntries(opts.fields!.map((f) => [f, t[f]]))) : page
+    return { effectiveWindow, total: all.length, transactions: rows, page: { limit, offset, returned: page.length } }
+  }
+
+  async getTransaction(planId: string, id: string): Promise<Txn> {
+    const data = await this.client.request<any>(`/plans/${planId}/transactions/${id}`)
+    return mapTxn(data.transaction)
+  }
+
+  #toApiTxn(t: any): any {
+    const out: any = { account_id: t.accountId, date: t.date, amount: t.amount === undefined ? undefined : dollarsToMilli(t.amount), payee_id: t.payeeId, payee_name: t.payeeName, category_id: t.categoryId, memo: t.memo, cleared: t.cleared, approved: t.approved, flag_color: t.flagColor, import_id: t.importId }
+    if (t.subtransactions) out.subtransactions = t.subtransactions.map((s: any) => ({ amount: dollarsToMilli(s.amount), category_id: s.categoryId, memo: s.memo }))
+    for (const k of Object.keys(out)) if (out[k] === undefined) delete out[k]
+    return out
+  }
+
+  async createTransactions(planId: string, txns: NewTxn[]) {
+    this.assertWrites()
+    const jid = this.journal?.begin(`create ${txns.length} transaction(s)`, [])
+    const data = await this.client.request<any>(`/plans/${planId}/transactions`, { method: 'POST', body: { transactions: txns.map((t) => this.#toApiTxn(t)) } })
+    const ids: string[] = data.transaction_ids ?? []
+    if (this.journal && jid) {
+      this.journal.setInverse(jid, [{ kind: 'delete_transactions', planId, ids }])
+      this.journal.commit(jid)
+    }
+    this.cache?.invalidate(planId)
+    return { created: ids.length, ids }
+  }
+
+  async updateTransactions(planId: string, updates: ({ id: string } & Partial<Pick<NewTxn, 'date' | 'amount' | 'payeeId' | 'payeeName' | 'categoryId' | 'memo' | 'cleared' | 'approved' | 'flagColor'>>)[], opts: { confirm?: boolean; expectedCount?: number } = {}) {
+    this.assertWrites()
+    if (updates.length > 5) {
+      if (!opts.confirm || opts.expectedCount === undefined) throw new ConfirmationRequiredError('Bulk transaction update (>5 rows)')
+      if (opts.expectedCount !== updates.length) throw new Error(`expected_count (${opts.expectedCount}) does not match the ${updates.length} rows provided — aborting; re-check the update set.`)
+    }
+    const prior = await Promise.all(updates.map((u) => this.getTransaction(planId, u.id)))
+    const inverse: InverseOp[] = [{ kind: 'patch_transactions', planId, updates: prior.map((p, i) => {
+      const changed: Record<string, unknown> = { id: p.id }
+      for (const k of Object.keys(updates[i]!)) if (k !== 'id') changed[k] = (p as any)[k] ?? null
+      return changed
+    }) }]
+    const jid = this.journal?.begin(`update ${updates.length} transaction(s)`, inverse)
+    await this.client.request<any>(`/plans/${planId}/transactions`, { method: 'PATCH', body: { transactions: updates.map((u) => ({ id: u.id, ...this.#toApiTxn(u) })) } })
+    if (jid) this.journal!.commit(jid)
+    this.cache?.invalidate(planId)
+    return { updated: updates.length }
+  }
+
+  async deleteTransaction(planId: string, id: string, opts: { confirm?: boolean } = {}) {
+    this.assertWrites()
+    if (!opts.confirm) throw new ConfirmationRequiredError('Deleting a transaction')
+    const full = await this.client.request<any>(`/plans/${planId}/transactions/${id}`)
+    const t = full.transaction
+    const jid = this.journal?.begin(`delete transaction ${id} (${t.payee_name ?? 'no payee'} ${t.amount / 1000})`, [{ kind: 'restore_transactions', planId, transactions: [{
+      account_id: t.account_id, date: t.date, amount: t.amount, payee_name: t.payee_name, category_id: t.category_id,
+      memo: t.memo, cleared: t.cleared, approved: t.approved, flag_color: t.flag_color,
+    }] }])
+    await this.client.request(`/plans/${planId}/transactions/${id}`, { method: 'DELETE' })
+    if (jid) this.journal!.commit(jid)
+    this.cache?.invalidate(planId)
+    return { deleted: id }
+  }
+
+  async importTransactions(planId: string) {
+    this.assertWrites()
+    const data = await this.client.request<any>(`/plans/${planId}/transactions/import`, { method: 'POST' })
+    this.cache?.invalidate(planId)
+    return { importedCount: (data.transaction_ids ?? []).length }
   }
 }

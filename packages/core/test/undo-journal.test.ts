@@ -32,4 +32,11 @@ describe('UndoJournal', () => {
     expect(j2.size()).toBe(50)
     expect(j2.popLastCommitted()!.description).toBe('e54')
   })
+  it('setInverse replaces inverse before commit', () => {
+    const j = new UndoJournal(path)
+    const id = j.begin('create', [])
+    j.setInverse(id, [{ kind: 'delete_transactions', planId: 'p', ids: ['n1'] }])
+    j.commit(id)
+    expect(j.popLastCommitted()!.inverse).toHaveLength(1)
+  })
 })

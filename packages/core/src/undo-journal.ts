@@ -39,6 +39,10 @@ export class UndoJournal {
     const e = this.#entries.find((x) => x.id === id)
     if (e) { e.committed = true; this.#flush() }
   }
+  setInverse(id: string, inverse: InverseOp[]): void {
+    const e = this.#entries.find((x) => x.id === id)
+    if (e) { e.inverse = inverse; this.#flush() }
+  }
   popLastCommitted(): UndoEntry | undefined {
     for (let i = this.#entries.length - 1; i >= 0; i--) {
       if (this.#entries[i]!.committed) {
