@@ -5,7 +5,7 @@
   "license": "MIT",
   "bin": { "mcp-for-ynab": "dist/main.js" },
   "files": ["dist"],
-  "scripts": { "build": "tsup", "test": "vitest run", "typecheck": "tsc --noEmit" },
+  "scripts": { "build": "tsup", "test": "vitest run --passWithNoTests", "typecheck": "tsc --noEmit" },
   "dependencies": {
     "@walensis/mcp-for-ynab-core": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.0.0",
