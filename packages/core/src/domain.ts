@@ -1,4 +1,4 @@
-import { YnabClient } from './client.js'
+import { YnabClient, YnabApiError } from './client.js'
 import { DeltaCache } from './delta-cache.js'
 import { UndoJournal, type InverseOp } from './undo-journal.js'
 import { milliToDollars, dollarsToMilli } from './money.js'
@@ -391,7 +391,16 @@ export class Ynab {
       for (const op of entry.inverse) {
         switch (op.kind) {
           case 'delete_transactions':
-            for (const id of op.ids) { await this.client.request(`/plans/${op.planId}/transactions/${id}`, { method: 'DELETE' }); actions++ }
+            for (const id of op.ids) {
+              try {
+                await this.client.request(`/plans/${op.planId}/transactions/${id}`, { method: 'DELETE' })
+                actions++
+              } catch (e) {
+                // Already gone is the desired end state — tolerate it so multi-id replay is idempotent
+                // and a retry doesn't get stuck re-failing on an id a prior attempt already deleted.
+                if (!(e instanceof YnabApiError) || e.status !== 404) throw e
+              }
+            }
             break
           case 'restore_transactions':
             await this.client.request(`/plans/${op.planId}/transactions`, { method: 'POST', body: { transactions: op.transactions } }); actions++
@@ -426,8 +435,8 @@ export class Ynab {
         const rid = this.journal.begin(entry.description, entry.inverse)
         this.journal.commit(rid)
       }
-      throw new Error(`Undo failed after ${actions} of ${entry.inverse.length} action(s): ${(e as Error).message} — ` +
-        `the undo record remains in the journal; retry undo_last.`)
+      throw new Error(`undo failed after completing ${actions} action(s); the entry has been re-journaled — ` +
+        `run undo_last again to retry (${(e as Error).message})`)
     }
     return { undone: entry.description, actions }
   }

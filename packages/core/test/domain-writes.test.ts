@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { Ynab } from '../src/domain.js'
 import { UndoJournal } from '../src/undo-journal.js'
 import { dollarsToMilli } from '../src/money.js'
+import { YnabApiError } from '../src/client.js'
 
 let journal: UndoJournal
 beforeEach(() => { journal = new UndoJournal(join(mkdtempSync(join(tmpdir(), 'u-')), 'undo.json')) })
@@ -73,6 +74,20 @@ describe('undoLast', () => {
     expect(entry).toBeDefined()
     expect(entry!.description).toBe('delete scheduled sched1')
     expect(entry!.inverse[0]).toMatchObject({ kind: 'delete_scheduled', id: 'sched1' })
+  })
+  it('tolerates already-deleted ids (404) in delete_transactions replay and continues the loop', async () => {
+    const client = { request: vi.fn(async (path: string, opts: any) => {
+      if (path.endsWith('/a')) throw new YnabApiError(404, '404.2', 'not found')
+      expect(opts.method).toBe('DELETE')
+      return {}
+    }) } as any
+    const y = new Ynab({ client, journal, allowWrites: true })
+    const id = journal.begin('delete 3 transaction(s)', [{ kind: 'delete_transactions', planId: 'p1', ids: ['a', 'b', 'c'] }])
+    journal.commit(id)
+    const res: any = await y.undoLast()
+    expect(res.undone).toBe('delete 3 transaction(s)')
+    expect(res.actions).toBe(2)
+    expect(journal.size()).toBe(0)
   })
 })
 
