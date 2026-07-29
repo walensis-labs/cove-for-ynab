@@ -40,4 +40,8 @@ describe('resolveEnv', () => {
     expect(resolveEnv({ YNAB_ACCESS_TOKEN_FILE: '/x', YNAB_ALLOW_WRITES: '1' }, () => ' filetok\n')).toEqual({ token: 'filetok', allowWrites: true })
     expect(() => resolveEnv({})).toThrow(/YNAB_ACCESS_TOKEN/)
   })
+  it('throws a friendly error when the token file cannot be read', () => {
+    expect(() => resolveEnv({ YNAB_ACCESS_TOKEN_FILE: '/nope' }, () => { throw new Error('ENOENT') }))
+      .toThrow(/Could not read YNAB_ACCESS_TOKEN_FILE/)
+  })
 })

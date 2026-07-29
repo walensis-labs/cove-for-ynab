@@ -5,7 +5,9 @@ import { Ynab, YnabClient, DeltaCache, UndoJournal, RateLimiter } from '@walensi
 import { resolveEnv } from './env.js'
 import { buildServer } from './server.js'
 
-const { token, allowWrites } = resolveEnv(process.env)
+let resolved
+try { resolved = resolveEnv(process.env) } catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exit(1) }
+const { token, allowWrites } = resolved
 const limiter = new RateLimiter()
 const ynab = new Ynab({
   client: new YnabClient({ token, limiter }),
