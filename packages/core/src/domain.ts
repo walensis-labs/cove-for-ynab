@@ -246,7 +246,7 @@ export class Ynab {
     this.assertWrites()
     let groupId = opts.groupId
     if (!groupId && opts.groupName) {
-      const g = await this.client.request<any>(`/plans/${planId}/categories/groups`, { method: 'POST', body: { category_group: { name: opts.groupName } } })
+      const g = await this.client.request<any>(`/plans/${planId}/category_groups`, { method: 'POST', body: { category_group: { name: opts.groupName } } })
       groupId = g.category_group.id
     }
     const data = await this.client.request<any>(`/plans/${planId}/categories`, { method: 'POST', body: { category: { name: opts.name, category_group_id: groupId } } })
