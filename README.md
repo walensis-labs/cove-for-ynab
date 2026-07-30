@@ -2,7 +2,7 @@
 
 A fast, safe MCP server for YNAB — full budget access for Claude and other AI assistants, read-only by default.
 
-34 tools covering budgets, transactions, categories, payees, accounts, scheduled transactions, and server-computed analytics (spending summaries, budget health, recurring charges, income vs. expense, net worth, month-close coverage, category and credit-card float history). Writes are off unless you explicitly turn them on, risky writes require confirmation, and writes that edit or delete existing data can be undone.
+35 tools covering budgets, transactions, categories, payees, accounts, scheduled transactions, and server-computed analytics (spending summaries, budget health, recurring charges, income vs. expense, net worth, month-close coverage, category and credit-card float history). Writes are off unless you explicitly turn them on, risky writes require confirmation, and writes that edit or delete existing data can be undone.
 
 ## Quickstart
 
@@ -105,6 +105,7 @@ The underlying API allows 200 requests/hour per token, shared across every app u
 | `propose_coverage` | read | Ordered move proposals to bring every overspent category to zero for the cutoff month. |
 | `get_category_history` | read | One category's monthly series (assigned/activity/available) across a month range. |
 | `credit_card_float_history` | read | Per-month credit-card float analysis over a range: owed vs. payment-category available, gap, changed flag. |
+| `backfill_ledger` | local write | Backfill the local balance-forward ledger from history: one record per card per month, with causes and the discovery summary ("carrying $X since <date>"). Local file only (`~/.mcp-for-ynab/ledger.json`) — never touches YNAB. |
 | `record_month_close` | local write | Persist a month-close balance-forward record (per-card gaps, blockers, causes, applied moves). Local file only (`~/.mcp-for-ynab/ledger.json`) — never touches YNAB. |
 | `get_month_close_ledger` | read | Read past balance-forward records (newest first), optionally filtered by cutoff. |
 | `undo_last` | write | Undo the most recent write made through this server. |
@@ -115,7 +116,9 @@ A guided monthly catch-up flow (Balance → Plan) built on top of the tools abov
 through blockers until the coverage gap is trusted, attributes credit-card float changes to
 their cause, proposes donor-first coverage moves, and — once you approve them — writes a
 balance-forward record via `record_month_close` so next month's session has a baseline to
-compare against (`get_month_close_ledger`).
+compare against (`get_month_close_ledger`). On the very first run, the ledger is empty — the
+session runs `backfill_ledger` for each card first and leads with what it finds (e.g.
+"carrying $865.75 since 2024-08") before attributing anything further.
 
 - **Claude Code**: use the `/month-close` skill.
 - **Claude Desktop and other MCP clients**: the server exposes the same flow as the `month-close-session` MCP prompt.
