@@ -32,7 +32,8 @@ export class LedgerStore {
     return full
   }
   list(opts?: { limit?: number; cutoff?: string }): MonthCloseRecord[] {
-    let results = [...this.#records].sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))
+    // Append-only ⇒ reversed insertion order IS newest-first — immune to same-millisecond recordedAt ties.
+    let results = [...this.#records].reverse()
     if (opts?.cutoff) results = results.filter((r) => r.cutoff === opts.cutoff)
     if (opts?.limit != null) results = results.slice(0, opts.limit)
     return results

@@ -23,6 +23,14 @@ describe('LedgerStore', () => {
     expect(reloaded.list({ cutoff: '2026-06-30' })).toHaveLength(1)
     expect(reloaded.list({ limit: 1 })[0]!.cutoff).toBe(b.cutoff)
   })
+  it('returns the second of two back-to-back appends first, even with identical recordedAt', () => {
+    const s = new LedgerStore(path)
+    const a = s.append(rec('2026-05-31'))
+    const b = s.append(rec('2026-05-31'))
+    const listed = s.list()
+    expect(listed[0]!.id).toBe(b.id)
+    expect(listed[1]!.id).toBe(a.id)
+  })
   it('validates cutoff and perCard', () => {
     const s = new LedgerStore(path)
     expect(() => s.append({ ...rec(), cutoff: 'July' })).toThrow(/ISO date/)
