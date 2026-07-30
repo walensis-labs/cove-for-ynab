@@ -640,6 +640,10 @@ export class Ynab {
   }
 
   async getCreditCardFloatHistory(planId: string, opts: { paymentCategoryId: string; cardAccountId: string; sinceMonth: string; untilMonth: string }) {
+    // Throws synchronously on an invalid range before any fetch fires — Promise.all below would
+    // otherwise kick off the account/transactions calls before #categoryHistoryMilli's internal
+    // monthRange rejection is observed. The result is discarded; it exists only to throw early.
+    monthRange(opts.sinceMonth, opts.untilMonth)
     const [h, accountData, txnsData] = await Promise.all([
       this.#categoryHistoryMilli(planId, { categoryId: opts.paymentCategoryId, sinceMonth: opts.sinceMonth, untilMonth: opts.untilMonth }),
       this.client.request<any>(`/plans/${planId}/accounts/${opts.cardAccountId}`),

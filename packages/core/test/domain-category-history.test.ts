@@ -59,4 +59,10 @@ describe('getCreditCardFloatHistory', () => {
     const txnCall = c.request.mock.calls.find(([p]: any[]) => String(p).endsWith('/accounts/a1/transactions'))!
     expect(txnCall[1].query).toEqual({ since_date: '2026-06-01' })
   })
+  it('validates the range before any fetch', async () => {
+    const c = { request: vi.fn() } as any
+    const y = new Ynab({ client: c, allowWrites: false })
+    await expect(y.getCreditCardFloatHistory('p', { paymentCategoryId: 'p1', cardAccountId: 'a1', sinceMonth: '2020-01', untilMonth: '2026-01' })).rejects.toThrow(/60 months/)
+    expect(c.request).not.toHaveBeenCalled()
+  })
 })
