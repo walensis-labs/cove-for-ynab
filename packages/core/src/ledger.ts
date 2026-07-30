@@ -10,6 +10,7 @@ export interface MonthCloseRecord {
   causes?: { month: string; change: number; cause: string; narrative?: string }[]
   moves?: { from: string; to: string; amount: number; source: 'category' | 'rta'; reason?: string }[]
   buffer?: number; note?: string
+  kind?: 'close' | 'backfill' // absent = 'close' (pre-Phase-1a records predate this field)
 }
 
 export class LedgerStore {
@@ -26,15 +27,22 @@ export class LedgerStore {
   append(record: Omit<MonthCloseRecord, 'id' | 'recordedAt'>): MonthCloseRecord {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(record.cutoff)) throw new Error('cutoff must be an ISO date (YYYY-MM-DD)')
     if (!record.perCard || record.perCard.length === 0) throw new Error('perCard must contain at least one card')
-    const full: MonthCloseRecord = { ...record, id: randomUUID(), recordedAt: new Date().toISOString() }
+    const full: MonthCloseRecord = { ...record, kind: record.kind ?? 'close', id: randomUUID(), recordedAt: new Date().toISOString() }
     this.#records.push(full)
     this.#flush()
     return full
   }
-  list(opts?: { limit?: number; cutoff?: string }): MonthCloseRecord[] {
+  /** Removes every kind==='backfill' record for this planId+account, then appends `records` (each forced kind:'backfill'). Real 'close' records are never touched. */
+  replaceBackfill(planId: string, account: string, records: Omit<MonthCloseRecord, 'id' | 'recordedAt'>[]): MonthCloseRecord[] {
+    this.#records = this.#records.filter((r) => !(r.kind === 'backfill' && r.planId === planId && r.perCard[0]?.account === account))
+    this.#flush()
+    return records.map((r) => this.append({ ...r, kind: 'backfill' }))
+  }
+  list(opts?: { limit?: number; cutoff?: string; kind?: 'close' | 'backfill' }): MonthCloseRecord[] {
     // Append-only ⇒ reversed insertion order IS newest-first — immune to same-millisecond recordedAt ties.
     let results = [...this.#records].reverse()
     if (opts?.cutoff) results = results.filter((r) => r.cutoff === opts.cutoff)
+    if (opts?.kind) results = results.filter((r) => (r.kind ?? 'close') === opts.kind)
     if (opts?.limit != null) results = results.slice(0, opts.limit)
     return results
   }

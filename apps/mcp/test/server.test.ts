@@ -17,10 +17,10 @@ async function connect(ynab: Ynab) {
 }
 
 describe('server', () => {
-  it('registers exactly 34 tools', async () => {
+  it('registers exactly 35 tools', async () => {
     const client = await connect(new Ynab({ client: { request: vi.fn() } as any, allowWrites: false }))
     const { tools } = await client.listTools()
-    expect(tools).toHaveLength(34)
+    expect(tools).toHaveLength(35)
     expect(tools.map((t) => t.name)).toContain('list_transactions')
   })
   it('record_month_close persists and get_month_close_ledger reads it back', async () => {
@@ -72,6 +72,24 @@ describe('server', () => {
     const body = JSON.parse(res.content[0].text)
     expect(body.points).toEqual([{ month: '2026-07', owed: 100, available: 100, gap: 0, changed: false, gapChange: 0, direction: 'flat' }])
     expect(body.skippedMonths).toEqual([])
+  })
+  it('backfill_ledger writes backfill records and returns the discovery summary', async () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'ledger-')), 'ledger.json')
+    const ledger = new LedgerStore(path)
+    const fake = { request: vi.fn(async (path: string) => {
+      if (path.includes('/categories/')) { expect(path).toMatch(/\/categories\/pay-cat$/); return { category: { id: 'pay-cat', name: 'Visa', budgeted: 0, activity: 0, balance: 0 } } }
+      if (path.endsWith('/accounts/card-acct')) return { account: { id: 'card-acct', name: 'Visa', balance: -100000 } }
+      if (path.endsWith('/accounts/card-acct/transactions')) return { transactions: [] }
+      throw new Error(`unmocked ${path}`)
+    }) } as any
+    const client = await connect(new Ynab({ client: fake, allowWrites: false, ledger }))
+    const res: any = await client.callTool({ name: 'backfill_ledger', arguments: { plan_id: 'p1', payment_category_id: 'pay-cat', card_account_id: 'card-acct', since_month: '2026-07', until_month: '2026-07' } })
+    expect(res.isError).toBeUndefined()
+    const body = JSON.parse(res.content[0].text)
+    expect(body.account).toBe('Visa')
+    expect(body.monthsWritten).toBe(1)
+    expect(ledger.list({ kind: 'backfill' })).toHaveLength(1)
+    expect(ledger.list({ kind: 'backfill' })[0]!.cutoff).toBe('2026-07-31')
   })
   it('read tool returns JSON content', async () => {
     const fake = { request: vi.fn(async () => ({ plans: [{ id: 'p1', name: 'Fam', last_modified_on: 'x', currency_format: { iso_code: 'USD' } }] })) } as any

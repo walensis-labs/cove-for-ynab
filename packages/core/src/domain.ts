@@ -2,7 +2,7 @@ import { YnabClient, YnabApiError } from './client.js'
 import { DeltaCache } from './delta-cache.js'
 import { UndoJournal, type InverseOp } from './undo-journal.js'
 import { LedgerStore, type MonthCloseRecord } from './ledger.js'
-import { milliToDollars, dollarsToMilli } from './money.js'
+import { milliToDollars, dollarsToMilli, formatDollars } from './money.js'
 import { applyFilters, aggregateTxns, TXN_FIELD_ALIASES, type TxnFilters } from './filters.js'
 import { spendingSummary, budgetHealth, detectRecurring, incomeVsExpense, netWorthHistory, monthWindowStart } from './analytics.js'
 import { asOfBalances, findBlockers, matchCards, findRedCategories, rankDonors, proposeMoves, type RawTxn, type RawAccount, type RawMonthCat } from './month-close.js'
@@ -41,6 +41,15 @@ export class ConfirmationRequiredError extends Error {
 
 const DAY = 86_400_000
 function defaultSince(): string { return new Date(Date.now() - 365 * DAY).toISOString().slice(0, 10) }
+function currentMonthUTC(): string {
+  const now = new Date()
+  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`
+}
+/** Real last day of a 'YYYY-MM' month as an ISO date. */
+function lastDayOf(month: string): string {
+  const [y, m] = month.split('-').map(Number) as [number, number]
+  return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10)
+}
 
 export interface NewTxn {
   accountId: string; date: string; amount: number
@@ -666,7 +675,11 @@ export class Ynab {
     }
   }
 
-  async getCreditCardFloatHistory(planId: string, opts: { paymentCategoryId: string; cardAccountId: string; sinceMonth: string; untilMonth: string }) {
+  /**
+   * Shared fetch+floatSeries+attributeChanges pipeline behind both getCreditCardFloatHistory and
+   * backfillLedger — keeps the two in lockstep so a backfilled month and its live equivalent always agree.
+   */
+  async #attributedFloat(planId: string, opts: { paymentCategoryId: string; cardAccountId: string; sinceMonth: string; untilMonth: string }) {
     // Throws synchronously on an invalid range before any fetch fires — Promise.all below would
     // otherwise kick off the account/transactions calls before #categoryHistoryMilli's internal
     // monthRange rejection is observed. The result is discarded; it exists only to throw early.
@@ -687,8 +700,13 @@ export class Ynab {
       txnsData.transactions,
     )
     const attrByMonth = new Map(attributed.map((a) => [a.month, a]))
+    return { account: accountData.account.name as string, series, attrByMonth, skippedMonths: h.skippedMonths, fetchedMonths: h.pointsMilli.length }
+  }
+
+  async getCreditCardFloatHistory(planId: string, opts: { paymentCategoryId: string; cardAccountId: string; sinceMonth: string; untilMonth: string }) {
+    const { account, series, attrByMonth, skippedMonths, fetchedMonths } = await this.#attributedFloat(planId, opts)
     return {
-      account: accountData.account.name as string,
+      account,
       points: series.map((p): {
         month: string; owed: number; available: number; gap: number; changed: boolean; gapChange: number
         direction: 'grew' | 'shrank' | 'flat'; cause?: GapCause; evidence?: { components: ReturnType<typeof toEvidenceComponent>[] }
@@ -700,10 +718,58 @@ export class Ynab {
         const primary = a.components.reduce((best, c) => (Math.abs(c.amountMilli) > Math.abs(best.amountMilli) ? c : best))
         return { ...base, cause: primary.cause, evidence: { components: a.components.map(toEvidenceComponent) } }
       }),
-      skippedMonths: h.skippedMonths,
+      skippedMonths,
       note: 'gap = available − owed at month end. 0 = covered; negative = payment category short (float). A STATIC gap is carried history; months with changed:true are where new float appeared or was paid down.' +
-        (h.pointsMilli.length === 0 ? ' WARNING: every month in the range was skipped (no data for this category) — the payment_category_id may be wrong.' : ''),
+        (fetchedMonths === 0 ? ' WARNING: every month in the range was skipped (no data for this category) — the payment_category_id may be wrong.' : ''),
     }
+  }
+
+  /**
+   * Backfills the LOCAL balance-forward ledger from history: one 'backfill' record per month (never
+   * touches YNAB), replacing any prior backfill records for this plan+card, plus a discovery summary
+   * of how long float has been carried. `untilMonth` defaults to the current month (UTC).
+   */
+  async backfillLedger(planId: string, opts: { paymentCategoryId: string; cardAccountId: string; sinceMonth: string; untilMonth?: string }) {
+    if (!this.ledger) throw new Error('No ledger configured — this server was started without a LedgerStore.')
+    const untilMonth = opts.untilMonth ?? currentMonthUTC()
+    const { account, series, attrByMonth } = await this.#attributedFloat(planId, { paymentCategoryId: opts.paymentCategoryId, cardAccountId: opts.cardAccountId, sinceMonth: opts.sinceMonth, untilMonth })
+
+    const records = series.map((p) => {
+      const workingAsOf = milliToDollars(-p.owedMilli)
+      const causes = (attrByMonth.get(p.month)?.components ?? []).map((c) => ({ month: p.month, change: milliToDollars(c.amountMilli), cause: c.cause as string }))
+      return {
+        planId, cutoff: lastDayOf(p.month), gapStatus: 'final' as const,
+        perCard: [{ account, workingAsOf, clearedAsOf: workingAsOf, availableAtMonthEnd: milliToDollars(p.availableMilli), gap: milliToDollars(p.gapMilli) }],
+        blockers: { unapproved: 0, uncategorized: 0, unclearedBeforeCutoff: 0 },
+        causes,
+        note: 'backfill: cleared state not reconstructable historically',
+      }
+    })
+    const written = this.ledger.replaceBackfill(planId, account, records)
+
+    // Walk backward from the newest point while the gap stays nonzero — that's the unbroken "carrying float" run.
+    let nonZeroSince: string | null = null
+    let sinceAtLeast = false
+    for (let i = series.length - 1; i >= 0; i--) {
+      if (Math.abs(series[i]!.gapMilli) <= 10) break
+      nonZeroSince = series[i]!.month
+      if (i === 0) sinceAtLeast = true
+    }
+    const last = series[series.length - 1]
+    const currentGap = milliToDollars(last?.gapMilli ?? 0)
+    const summary = nonZeroSince === null
+      ? `Card is covered as of ${last?.month ?? untilMonth}.`
+      : `You've been carrying ${formatDollars(Math.abs(currentGap))} of float since ${sinceAtLeast ? 'at least ' : ''}${nonZeroSince}.`
+
+    const changePoints = series.filter((p) => p.changed).map((p) => {
+      const a = attrByMonth.get(p.month)
+      const primary = a && a.components.length > 0
+        ? a.components.reduce((best, c) => (Math.abs(c.amountMilli) > Math.abs(best.amountMilli) ? c : best))
+        : undefined
+      return { month: p.month, gapChange: milliToDollars(p.gapChangeMilli), cause: (primary?.cause ?? 'unattributed') as GapCause }
+    })
+
+    return { account, monthsWritten: written.length, discovery: { currentGap, nonZeroSince, sinceAtLeast, summary }, changePoints }
   }
 
   recordMonthClose(record: Omit<MonthCloseRecord, 'id' | 'recordedAt'>): MonthCloseRecord {
