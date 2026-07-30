@@ -13,6 +13,10 @@ describe('monthRange', () => {
     expect(() => monthRange('2026-08', '2026-07')).toThrow(/before/)
     expect(() => monthRange('2020-01', '2026-01')).toThrow(/60 months/)
   })
+  it('rejects invalid calendar months', () => {
+    expect(() => monthRange('2026-13', '2026-13')).toThrow(/between 01 and 12/)
+    expect(() => monthRange('2026-00', '2026-00')).toThrow(/between 01 and 12/)
+  })
 })
 
 describe('floatSeries', () => {

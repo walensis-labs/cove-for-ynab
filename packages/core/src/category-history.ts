@@ -5,17 +5,24 @@ export function monthRange(sinceMonth: string, untilMonth: string): string[] {
   if (!MONTH_RE.test(sinceMonth) || !MONTH_RE.test(untilMonth)) {
     throw new Error(`Months must be formatted YYYY-MM (got "${sinceMonth}" / "${untilMonth}").`)
   }
-  if (sinceMonth > untilMonth) throw new Error(`since_month (${sinceMonth}) must be before or equal to until_month (${untilMonth}).`)
-  const out: string[] = []
   const [sy, sm] = sinceMonth.split('-').map(Number) as [number, number]
   const [uy, um] = untilMonth.split('-').map(Number) as [number, number]
+  if (sm < 1 || sm > 12) {
+    throw new Error(`Month must be between 01 and 12 (got "${sinceMonth}").`)
+  }
+  if (um < 1 || um > 12) {
+    throw new Error(`Month must be between 01 and 12 (got "${untilMonth}").`)
+  }
+  if (sinceMonth > untilMonth) throw new Error(`since_month (${sinceMonth}) must be before or equal to until_month (${untilMonth}).`)
+  const count = (uy - sy) * 12 + (um - sm) + 1
+  if (count > MAX_MONTHS) {
+    throw new Error(`Range spans ${count} months — the limit is 60 months (each month costs one API call against YNAB's 200/hour budget). Narrow the range.`)
+  }
+  const out: string[] = []
   let y = sy, m = sm
   while (y < uy || (y === uy && m <= um)) {
     out.push(`${y}-${String(m).padStart(2, '0')}-01`)
     if (++m > 12) { m = 1; y++ }
-  }
-  if (out.length > MAX_MONTHS) {
-    throw new Error(`Range spans ${out.length} months — the limit is 60 months (each month costs one API call against YNAB's 200/hour budget). Narrow the range.`)
   }
   return out
 }
