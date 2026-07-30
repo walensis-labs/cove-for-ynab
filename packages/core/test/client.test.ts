@@ -52,4 +52,11 @@ describe('YnabClient', () => {
     await expect(c.request('/user')).rejects.toThrow(/rate limit/i)
     expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
+  it('times out a stalled request with a clear error instead of hanging', async () => {
+    const fetchImpl = vi.fn((_url: any, init: any) => new Promise<Response>((_, reject) => {
+      init.signal.addEventListener('abort', () => reject(init.signal.reason))
+    }))
+    const c = new YnabClient({ token: 't', fetchImpl: fetchImpl as any, timeoutMs: 50 })
+    await expect(c.request('/plans/p1/months/2026-07-01/categories/c1')).rejects.toThrow(/timed out after 50ms.*\/plans\/p1\/months\/2026-07-01\/categories\/c1.*retry/s)
+  })
 })

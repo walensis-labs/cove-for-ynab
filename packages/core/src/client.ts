@@ -23,12 +23,14 @@ export class YnabClient {
   readonly #fetch: typeof fetch
   readonly #base: string
   readonly #limiter?: RateLimiter
+  readonly #timeoutMs: number
 
-  constructor(opts: { token: string; fetchImpl?: typeof fetch; baseUrl?: string; limiter?: RateLimiter }) {
+  constructor(opts: { token: string; fetchImpl?: typeof fetch; baseUrl?: string; limiter?: RateLimiter; timeoutMs?: number }) {
     this.#token = opts.token
     this.#fetch = opts.fetchImpl ?? fetch
     this.#base = opts.baseUrl ?? 'https://api.ynab.com/v1'
     this.#limiter = opts.limiter
+    this.#timeoutMs = opts.timeoutMs ?? 45_000
   }
 
   #redact(s: string): string {
@@ -39,11 +41,20 @@ export class YnabClient {
     this.#limiter?.take()
     const url = new URL(this.#base + path)
     for (const [k, v] of Object.entries(opts.query ?? {})) if (v !== undefined) url.searchParams.set(k, String(v))
-    const res = await this.#fetch(url, {
-      method: opts.method ?? 'GET',
-      headers: { Authorization: `Bearer ${this.#token}`, 'Content-Type': 'application/json' },
-      body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
-    })
+    let res: Response
+    try {
+      res = await this.#fetch(url, {
+        method: opts.method ?? 'GET',
+        headers: { Authorization: `Bearer ${this.#token}`, 'Content-Type': 'application/json' },
+        body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+        signal: AbortSignal.timeout(this.#timeoutMs),
+      })
+    } catch (e) {
+      if (e instanceof Error && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
+        throw new Error(`YNAB API request timed out after ${this.#timeoutMs}ms (${path}). Network stall or YNAB slowness — retry; if it persists, check status.ynab.com.`)
+      }
+      throw e
+    }
     const text = await res.text()
     if (!res.ok) {
       let id = String(res.status)
