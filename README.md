@@ -2,7 +2,7 @@
 
 A fast, safe MCP server for YNAB — full budget access for Claude and other AI assistants, read-only by default.
 
-28 tools covering budgets, transactions, categories, payees, accounts, scheduled transactions, and server-computed analytics (spending summaries, budget health, recurring charges, income vs. expense, net worth). Writes are off unless you explicitly turn them on, risky writes require confirmation, and writes that edit or delete existing data can be undone.
+30 tools covering budgets, transactions, categories, payees, accounts, scheduled transactions, and server-computed analytics (spending summaries, budget health, recurring charges, income vs. expense, net worth, month-close coverage). Writes are off unless you explicitly turn them on, risky writes require confirmation, and writes that edit or delete existing data can be undone.
 
 ## Quickstart
 
@@ -101,6 +101,8 @@ The underlying API allows 200 requests/hour per token, shared across every app u
 | `detect_recurring_charges` | read | Find recurring charges (subscriptions/bills) from about 13 months of history. |
 | `income_vs_expense` | read | Monthly income/expense/net series. |
 | `net_worth_history` | read | Monthly net-worth series computed from full transaction history. |
+| `month_close` | read | Month-close report for a cutoff date: credit-card coverage, blockers, overspent categories, ranked donors. |
+| `propose_coverage` | read | Ordered move proposals to bring every overspent category to zero for the cutoff month. |
 | `undo_last` | write | Undo the most recent write made through this server. |
 
 ## Development

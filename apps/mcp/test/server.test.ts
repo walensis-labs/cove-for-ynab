@@ -14,11 +14,22 @@ async function connect(ynab: Ynab) {
 }
 
 describe('server', () => {
-  it('registers exactly 28 tools', async () => {
+  it('registers exactly 30 tools', async () => {
     const client = await connect(new Ynab({ client: { request: vi.fn() } as any, allowWrites: false }))
     const { tools } = await client.listTools()
-    expect(tools).toHaveLength(28)
+    expect(tools).toHaveLength(30)
     expect(tools.map((t) => t.name)).toContain('list_transactions')
+  })
+  it('month_close is registered read-only and returns the report', async () => {
+    const fake = { request: vi.fn(async (path: string) => {
+      if (path.endsWith('/accounts')) return { accounts: [] }
+      if (path.endsWith('/transactions')) return { transactions: [] }
+      return { month: { month: '2026-07-01', to_be_budgeted: 0, categories: [] } }
+    }) } as any
+    const client = await connect(new Ynab({ client: fake, allowWrites: false }))
+    const res: any = await client.callTool({ name: 'month_close', arguments: { plan_id: 'p1', cutoff: '2026-07-31' } })
+    expect(res.isError).toBeUndefined()
+    expect(JSON.parse(res.content[0].text).cutoff).toBe('2026-07-31')
   })
   it('read tool returns JSON content', async () => {
     const fake = { request: vi.fn(async () => ({ plans: [{ id: 'p1', name: 'Fam', last_modified_on: 'x', currency_format: { iso_code: 'USD' } }] })) } as any
