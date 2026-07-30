@@ -57,4 +57,14 @@ describe('floatSeries', () => {
       ['2026-08', 200000, 'shrank'],
     ])
   })
+  it('a one-cent (10 milli) gap change sits in the deadband; 11 milli trips it', () => {
+    const s = floatSeries(
+      [{ month: '2026-06', availableMilli: 0 }, { month: '2026-07', availableMilli: 10 }, { month: '2026-08', availableMilli: 21 }],
+      [], 0)
+    expect(s.map((p) => [p.month, p.gapChangeMilli, p.changed, p.direction])).toEqual([
+      ['2026-06', 0, false, 'flat'],
+      ['2026-07', 10, false, 'flat'],
+      ['2026-08', 11, true, 'shrank'],
+    ])
+  })
 })

@@ -42,9 +42,9 @@ export function floatSeries(
     const after = live.filter((t) => t.date > monthEnd).reduce((s, t) => s + t.amount, 0)
     const owedMilli = -(currentBalanceMilli - after)
     const gapMilli = p.availableMilli - owedMilli
-    const changed = prevGap !== null && Math.abs(gapMilli - prevGap) > 5
+    const changed = prevGap !== null && Math.abs(gapMilli - prevGap) > 10
     const gapChangeMilli = prevGap === null ? 0 : gapMilli - prevGap
-    const direction = gapChangeMilli < -5 ? 'grew' : gapChangeMilli > 5 ? 'shrank' : 'flat'
+    const direction = gapChangeMilli < -10 ? 'grew' : gapChangeMilli > 10 ? 'shrank' : 'flat'
     prevGap = gapMilli
     return { month: p.month, owedMilli, availableMilli: p.availableMilli, gapMilli, changed, gapChangeMilli, direction }
   })

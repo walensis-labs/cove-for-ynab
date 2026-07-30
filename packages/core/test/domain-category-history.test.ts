@@ -40,7 +40,7 @@ describe('getCreditCardFloatHistory', () => {
   it('composes owed/available/gap in dollars with changed flags', async () => {
     const c = { request: vi.fn(async (path: string) => {
       const m = path.match(/\/months\/(\d{4}-\d{2})-01\/categories\/p1$/)
-      if (m) return { category: { id: 'p1', name: 'Citi Card', budgeted: m[1] === '2026-08' ? 200000 : 0, activity: 0, balance: m[1] === '2026-08' ? 1000000 : 500000 } }
+      if (m) return { category: { id: 'p1', name: 'Citi Card', budgeted: m[1] === '2026-08' ? 250000 : 0, activity: 0, balance: m[1] === '2026-08' ? 1000000 : 500000 } }
       if (path.endsWith('/accounts/a1')) return { account: { id: 'a1', name: 'Citi Card', balance: -1000000 } }
       if (path.endsWith('/accounts/a1/transactions')) return { transactions: [
         { date: '2026-07-10', amount: -200000, deleted: false },
@@ -55,7 +55,7 @@ describe('getCreditCardFloatHistory', () => {
     expect(res.points).toEqual([
       { month: '2026-06', owed: 500, available: 500, gap: 0, changed: false, gapChange: 0, direction: 'flat' },
       { month: '2026-07', owed: 700, available: 500, gap: -200, changed: true, gapChange: -200, direction: 'grew', cause: 'uncovered_spending', evidence: { components: [{ cause: 'uncovered_spending', amount: -200, residual: -200 }] } },
-      { month: '2026-08', owed: 1000, available: 1000, gap: 0, changed: true, gapChange: 200, direction: 'shrank', cause: 'deliberate_cover', evidence: { components: [{ cause: 'deliberate_cover', amount: 200, assigned: 200 }] } },
+      { month: '2026-08', owed: 1000, available: 1000, gap: 0, changed: true, gapChange: 200, direction: 'shrank', cause: 'deliberate_cover', evidence: { components: [{ cause: 'deliberate_cover', amount: 250, assigned: 250 }, { cause: 'uncovered_spending', amount: -50, residual: -50 }] } },
     ])
     expect(res.points.map((p: any) => p.direction)).toEqual(['flat', 'grew', 'shrank'])
     const txnCall = c.request.mock.calls.find(([p]: any[]) => String(p).endsWith('/accounts/a1/transactions'))!
@@ -66,6 +66,10 @@ describe('getCreditCardFloatHistory', () => {
     expect(grew.evidence!.components[0]).toMatchObject({ cause: 'uncovered_spending', amount: -200 })
     const shrank = res.points.find((p: any) => p.month === '2026-08')!
     expect(shrank.cause).toBe('deliberate_cover')
+    expect(shrank.evidence!.components).toEqual([
+      { cause: 'deliberate_cover', amount: 250, assigned: 250 },
+      { cause: 'uncovered_spending', amount: -50, residual: -50 },
+    ])
     expect(res.points.find((p: any) => p.month === '2026-06')!.cause).toBeUndefined()
   })
   it('validates the range before any fetch', async () => {
