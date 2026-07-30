@@ -2,7 +2,7 @@ import { YnabClient, YnabApiError } from './client.js'
 import { DeltaCache } from './delta-cache.js'
 import { UndoJournal, type InverseOp } from './undo-journal.js'
 import { milliToDollars, dollarsToMilli } from './money.js'
-import { applyFilters, aggregateTxns, type TxnFilters } from './filters.js'
+import { applyFilters, aggregateTxns, TXN_FIELD_ALIASES, type TxnFilters } from './filters.js'
 import { spendingSummary, budgetHealth, detectRecurring, incomeVsExpense, netWorthHistory, monthWindowStart } from './analytics.js'
 import { asOfBalances, findBlockers, matchCards, findRedCategories, rankDonors, proposeMoves, type RawTxn, type RawAccount, type RawMonthCat } from './month-close.js'
 import { monthRange, floatSeries } from './category-history.js'
@@ -163,7 +163,13 @@ export class Ynab {
     const limit = Math.min(opts.limit ?? 25, 200)
     const offset = opts.offset ?? 0
     const page = all.slice(offset, offset + limit)
-    const rows = opts.fields?.length ? page.map((t) => Object.fromEntries(opts.fields!.map((f) => [f, t[f]]))) : page
+    const rows = opts.fields?.length
+      ? page.map((t) => Object.fromEntries(opts.fields!.map((f) => {
+          const key = (TXN_FIELD_ALIASES[f as string] ?? f) as keyof Txn
+          const v = t[key]
+          return [f, v === undefined ? null : v]
+        })))
+      : page
     return { effectiveWindow, total: all.length, transactions: rows, page: { limit, offset, returned: page.length } }
   }
 

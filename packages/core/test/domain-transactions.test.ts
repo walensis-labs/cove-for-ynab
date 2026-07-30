@@ -51,6 +51,13 @@ describe('listTransactions', () => {
     ])
     expect(res.transactions).toBeUndefined()
   })
+  it('fields accepts snake_case names and never drops requested keys', async () => {
+    const client = { request: vi.fn(async () => ({ transactions: [apiTxn({ transfer_account_id: null })] })) } as any
+    const y = new Ynab({ client, allowWrites: false })
+    const res: any = await y.listTransactions('p1', { fields: ['payee_name', 'transfer_account_id', 'amount'] as any })
+    expect(res.transactions[0]).toEqual({ payee_name: 'Kroger', transfer_account_id: null, amount: -45.5 })
+    expect(JSON.stringify(res.transactions[0])).toContain('transfer_account_id')
+  })
 })
 
 describe('writes', () => {

@@ -1,5 +1,11 @@
 import type { Txn } from './types.js'
 
+export const TXN_FIELD_ALIASES: Record<string, string> = {
+  payee_name: 'payeeName', payee_id: 'payeeId', category_name: 'categoryName', category_id: 'categoryId',
+  account_name: 'accountName', account_id: 'accountId', transfer_account_id: 'transferAccountId',
+  import_id: 'importId', flag_color: 'flagColor',
+}
+
 export interface TxnFilters {
   accountId?: string; categoryId?: string; payeeId?: string
   sinceDate?: string; untilDate?: string

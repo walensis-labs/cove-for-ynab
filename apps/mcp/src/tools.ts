@@ -27,7 +27,7 @@ export const tools: ToolDef[] = [
       search: z.string().optional().describe('case-insensitive payee/memo substring'),
       min_amount: z.number().optional(), max_amount: z.number().optional(), flag_color: z.string().optional(),
       limit: z.number().int().max(200).optional().describe('default 25'), offset: z.number().int().optional(),
-      fields: z.array(z.string()).optional().describe('project only these fields'),
+      fields: z.array(z.string()).optional().describe('project only these fields (snake_case or camelCase; e.g. payee_name, category_name, transfer_account_id)'),
       aggregate: z.enum(['category', 'payee', 'month']).optional(),
       sort: z.enum(['date_desc', 'date_asc']).optional().describe('row order before pagination; default date_desc (newest first)'),
     }, handler: (y, a) => y.listTransactions(a.plan_id, { accountId: a.account_id, categoryId: a.category_id, payeeId: a.payee_id, sinceDate: a.since_date, untilDate: a.until_date, unapprovedOnly: a.unapproved_only, unclearedOnly: a.uncleared_only, search: a.search, minAmount: a.min_amount, maxAmount: a.max_amount, flagColor: a.flag_color, limit: a.limit, offset: a.offset, fields: a.fields, aggregate: a.aggregate, sort: a.sort }) },
