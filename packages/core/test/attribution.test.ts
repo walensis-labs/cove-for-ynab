@@ -57,3 +57,43 @@ describe('attributeChanges — §12 fixture table (binding)', () => {
     expect(res[0]!.components[0]!.evidence.txns![0]!.id).toBe('ca1')
   })
 })
+
+describe('attributeChanges — reversal subset matching (review fix)', () => {
+  it('bystander: an unrelated same-|amount| charge is excluded from the reversal evidence', () => {
+    const trioPlusBystander = [
+      { id: 'pay1', date: '2026-04-10', amount: 3322550, category_id: null, transfer_account_id: 'chk' },
+      { id: 'rev1', date: '2026-04-15', amount: -3322550, category_id: null, transfer_account_id: null },
+      { id: 'pay2', date: '2026-04-17', amount: 3322550, category_id: null, transfer_account_id: 'chk' },
+      { id: 'sub1', date: '2026-04-05', amount: -3322550, category_id: 'c-sub', transfer_account_id: null },
+    ]
+    const res = attributeChanges([pt('2026-03', 0, 6966920), pt('2026-04', -3322550, 1417170)], trioPlusBystander)
+    expect(res[0]!.components).toHaveLength(1)
+    const c = res[0]!.components[0]!
+    expect(c.cause).toBe('payment_reversal')
+    expect(c.amountMilli).toBe(-3322550)
+    expect(c.evidence.txns!.map((t) => t.id).sort()).toEqual(['pay1', 'pay2', 'rev1'])
+  })
+
+  it('partial reversal (k=1 subset) leaves a residual that absorption then clears', () => {
+    const trio = [
+      { id: 'pay1', date: '2026-04-10', amount: 3322550, category_id: null, transfer_account_id: 'chk' },
+      { id: 'rev1', date: '2026-04-15', amount: -3322550, category_id: null, transfer_account_id: null },
+      { id: 'pay2', date: '2026-04-17', amount: 3322550, category_id: null, transfer_account_id: 'chk' },
+    ]
+    const res = attributeChanges([pt('2026-03', 0, -189490), pt('2026-04', -3133060, 100000)], trio)
+    expect(res[0]!.components).toHaveLength(2)
+    const [c1, c2] = res[0]!.components
+    expect(c1).toMatchObject({ cause: 'payment_reversal', amountMilli: -3322550 })
+    expect(c1!.evidence.txns!.map((t) => t.id).sort()).toEqual(['pay1', 'pay2', 'rev1'])
+    expect(c2).toEqual({ cause: 'overpayment_absorption', amountMilli: 189490, evidence: { priorRedMilli: -189490 } })
+  })
+
+  it('two unrelated equal-|amount| charges (a 2x multiple) do not form a reversal', () => {
+    const unrelated = [
+      { id: 'x1', date: '2026-04-08', amount: -50000, category_id: 'c1', transfer_account_id: null },
+      { id: 'x2', date: '2026-04-20', amount: -50000, category_id: 'c2', transfer_account_id: null },
+    ]
+    const res = attributeChanges([pt('2026-03', 0, 500000), pt('2026-04', -100000, 400000)], unrelated)
+    expect(res[0]!.components).toEqual([{ cause: 'uncovered_spending', amountMilli: -100000, evidence: { residualMilli: -100000 } }])
+  })
+})

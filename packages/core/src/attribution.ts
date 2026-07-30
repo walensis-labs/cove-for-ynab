@@ -12,8 +12,18 @@ const near = (a: number, b: number) => Math.abs(a - b) <= EPS
 
 function windowTxns(txns: CardTxn[], month: string): CardTxn[] {
   const start = new Date(Date.parse(`${month}-01`) - 30 * DAY).toISOString().slice(0, 10)
-  const end = new Date(Date.parse(`${month}-28`) + 33 * DAY).toISOString().slice(0, 10)
+  const [y, m] = month.split('-').map(Number) as [number, number]
+  const monthEnd = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10)
+  const end = new Date(Date.parse(monthEnd) + 30 * DAY).toISOString().slice(0, 10)
   return txns.filter((t) => !t.deleted && t.date >= start && t.date <= end)
+}
+
+const byDate = (a: CardTxn, b: CardTxn) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)
+
+/** Earliest txn in `pool` dated within [lo, hi] inclusive, else the earliest overall. Assumes `pool` sorted ascending. */
+function pickBetweenOrEarliest(pool: CardTxn[], lo: string, hi: string): CardTxn {
+  const between = pool.filter((t) => t.date >= lo && t.date <= hi)
+  return (between[0] ?? pool[0])!
 }
 
 export function attributeChanges(points: AttributionMonthInput[], cardTxns: CardTxn[]): AttributedChange[] {
@@ -33,7 +43,9 @@ export function attributeChanges(points: AttributionMonthInput[], cardTxns: Card
 
     if (Math.abs(remaining) > FLOOR) {
       const win = windowTxns(cardTxns, p.month)
-      // reversal sets: equal-|amount| groups whose net ≈ −remaining and |amount| ≈ |remaining|
+      // reversal sets: equal-|amount| groups where remaining ≈ −k·amount for k ∈ {1, −1};
+      // subset evidence (2 same-sign + 1 opposite-sign, opposite chosen by between-dates rule)
+      // ignores same-|amount| bystander txns rather than zeroing the whole group's net.
       const groups = new Map<number, CardTxn[]>()
       for (const t of win) {
         const key = Math.abs(t.amount)
@@ -41,14 +53,27 @@ export function attributeChanges(points: AttributionMonthInput[], cardTxns: Card
       }
       let matched = false
       for (const [absAmount, members] of groups) {
-        if (members.length < 2 || !near(absAmount, Math.abs(remaining))) continue
-        const net = members.reduce((s, t) => s + t.amount, 0)
-        if (near(net, -remaining)) {
-          components.push({ cause: 'payment_reversal', amountMilli: -net, evidence: { txns: members.map((t) => ({ id: t.id, date: t.date, amountMilli: t.amount })) } })
-          remaining += net
-          matched = true
-          break
+        if (absAmount === 0) continue
+        const k = Math.round(-remaining / absAmount)
+        if (k !== 1 && k !== -1) continue
+        const positives = members.filter((t) => t.amount > 0).sort(byDate)
+        const negatives = members.filter((t) => t.amount < 0).sort(byDate)
+        let evidence: CardTxn[]
+        if (k === 1) {
+          if (positives.length < 2 || negatives.length < 1) continue
+          const [p1, p2] = positives as [CardTxn, CardTxn]
+          const chosenNeg = pickBetweenOrEarliest(negatives, p1.date, p2.date)
+          evidence = [p1, p2, chosenNeg]
+        } else {
+          if (negatives.length < 2 || positives.length < 1) continue
+          const [n1, n2] = negatives as [CardTxn, CardTxn]
+          const chosenPos = pickBetweenOrEarliest(positives, n1.date, n2.date)
+          evidence = [n1, n2, chosenPos]
         }
+        components.push({ cause: 'payment_reversal', amountMilli: -(k * absAmount), evidence: { txns: evidence.map((t) => ({ id: t.id, date: t.date, amountMilli: t.amount })) } })
+        remaining += k * absAmount
+        matched = true
+        break
       }
       if (!matched) {
         const debts = win.filter((t) => t.amount < 0 && t.category_id === null && t.transfer_account_id !== null)
