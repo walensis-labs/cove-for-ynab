@@ -14,10 +14,10 @@ async function connect(ynab: Ynab) {
 }
 
 describe('server', () => {
-  it('registers exactly 30 tools', async () => {
+  it('registers exactly 32 tools', async () => {
     const client = await connect(new Ynab({ client: { request: vi.fn() } as any, allowWrites: false }))
     const { tools } = await client.listTools()
-    expect(tools).toHaveLength(30)
+    expect(tools).toHaveLength(32)
     expect(tools.map((t) => t.name)).toContain('list_transactions')
   })
   it('month_close is registered read-only and returns the report', async () => {
@@ -30,6 +30,15 @@ describe('server', () => {
     const res: any = await client.callTool({ name: 'month_close', arguments: { plan_id: 'p1', cutoff: '2026-07-31' } })
     expect(res.isError).toBeUndefined()
     expect(JSON.parse(res.content[0].text).cutoff).toBe('2026-07-31')
+  })
+  it('get_category_history is registered and returns the series shape', async () => {
+    const fake = { request: vi.fn(async () => ({ category: { id: 'c1', name: 'X', budgeted: 0, activity: 0, balance: 0 } })) } as any
+    const client = await connect(new Ynab({ client: fake, allowWrites: false }))
+    const res: any = await client.callTool({ name: 'get_category_history', arguments: { plan_id: 'p1', category_id: 'c1', since_month: '2026-06', until_month: '2026-07' } })
+    expect(res.isError).toBeUndefined()
+    const body = JSON.parse(res.content[0].text)
+    expect(body.points).toHaveLength(2)
+    expect(body.category.id).toBe('c1')
   })
   it('read tool returns JSON content', async () => {
     const fake = { request: vi.fn(async () => ({ plans: [{ id: 'p1', name: 'Fam', last_modified_on: 'x', currency_format: { iso_code: 'USD' } }] })) } as any
