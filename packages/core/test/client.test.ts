@@ -59,4 +59,13 @@ describe('YnabClient', () => {
     const c = new YnabClient({ token: 't', fetchImpl: fetchImpl as any, timeoutMs: 50 })
     await expect(c.request('/plans/p1/months/2026-07-01/categories/c1')).rejects.toThrow(/timed out after 50ms.*\/plans\/p1\/months\/2026-07-01\/categories\/c1.*retry/s)
   })
+  it('times out a stall during the response body read, not just during fetch', async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: () => Promise.reject(Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' })),
+    } as unknown as Response))
+    const c = new YnabClient({ token: 't', fetchImpl: fetchImpl as any })
+    await expect(c.request('/user')).rejects.toThrow(/timed out after 45000ms.*\/user.*retry/s)
+  })
 })

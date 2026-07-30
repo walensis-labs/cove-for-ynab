@@ -42,6 +42,7 @@ export class YnabClient {
     const url = new URL(this.#base + path)
     for (const [k, v] of Object.entries(opts.query ?? {})) if (v !== undefined) url.searchParams.set(k, String(v))
     let res: Response
+    let text: string
     try {
       res = await this.#fetch(url, {
         method: opts.method ?? 'GET',
@@ -49,13 +50,13 @@ export class YnabClient {
         body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
         signal: AbortSignal.timeout(this.#timeoutMs),
       })
+      text = await res.text()
     } catch (e) {
       if (e instanceof Error && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
         throw new Error(`YNAB API request timed out after ${this.#timeoutMs}ms (${path}). Network stall or YNAB slowness — retry; if it persists, check status.ynab.com.`)
       }
       throw e
     }
-    const text = await res.text()
     if (!res.ok) {
       let id = String(res.status)
       let detail = res.statusText || 'YNAB API error'
