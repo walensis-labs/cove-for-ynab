@@ -105,7 +105,7 @@ The underlying API allows 200 requests/hour per token, shared across every app u
 | `propose_coverage` | read | Ordered move proposals to bring every overspent category to zero for the cutoff month. |
 | `get_category_history` | read | One category's monthly series (assigned/activity/available) across a month range. |
 | `credit_card_float_history` | read | Per-month credit-card float analysis over a range: owed vs. payment-category available, gap, changed flag. |
-| `backfill_ledger` | local write | Backfill the local balance-forward ledger from history: one record per card per month, with causes and the discovery summary ("carrying $X since <date>"). Local file only (`~/.mcp-for-ynab/ledger.json`) — never touches YNAB. |
+| `backfill_ledger` | local write | Backfill the local balance-forward ledger from history: one record per card per fully-elapsed month, with causes and the discovery summary ("carrying $X since <date>"). Local file only (`~/.mcp-for-ynab/ledger.json`) — never touches YNAB. |
 | `record_month_close` | local write | Persist a month-close balance-forward record (per-card gaps, blockers, causes, applied moves). Local file only (`~/.mcp-for-ynab/ledger.json`) — never touches YNAB. |
 | `get_month_close_ledger` | read | Read past balance-forward records (newest first), optionally filtered by cutoff. |
 | `undo_last` | write | Undo the most recent write made through this server. |

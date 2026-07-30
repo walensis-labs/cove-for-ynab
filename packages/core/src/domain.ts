@@ -735,7 +735,7 @@ export class Ynab {
   }
 
   /**
-   * Backfills the LOCAL balance-forward ledger from history: one 'backfill' record per month (never
+   * Backfills the LOCAL balance-forward ledger from history: one 'backfill' record per fully-elapsed month (never
    * touches YNAB), replacing any prior backfill records for this plan+card, plus a discovery summary
    * of how long float has been carried. `untilMonth` defaults to the current month (UTC).
    */
