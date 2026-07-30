@@ -292,3 +292,4 @@ Task 1's embedded reference implementation contained two review-caught defects �
 1. `windowTxns` end bound `month-28 + 33d` overshoots real `monthEnd + 30d` (February bleeds into April). Corrected: exact month end via `Date.UTC(y, m, 0)`.
 2. Whole-group net matching lets a same-|amount| bystander suppress a genuine reversal. Corrected: subset matching — k = round(−remaining/X) ∈ {±1}, both signs required (k=1: ≥2 pos + ≥1 neg), evidence = 2 earliest same-sign + between-dates opposite txn.
 The spec's classifier section carries the corrected semantics; three additional regression tests (bystander, partial-reversal-then-absorption, equal-pair rejection) are binding alongside the original table.
+3. Round 3 added the LEFTOVER GATE (accept k=±1 only when leftover ≈0 within EPS or ≈ the prior red) plus false-positive and window-bound regression tests, and a sub-dollar-leftover test. The spec carries the full corrected semantics.

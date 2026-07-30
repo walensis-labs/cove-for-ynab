@@ -61,7 +61,7 @@ export function attributeChanges(points: AttributionMonthInput[], cardTxns: Card
         // false-positive band where an unrelated same-|amount| trio "explains" an unrelated gap.
         const leftover = remaining + k * absAmount
         const prevForGate = i > 0 ? points[i - 1] : undefined
-        const leftoverOk = Math.abs(leftover) <= FLOOR || (prevForGate !== undefined && prevForGate.availableMilli < 0 && near(leftover, -prevForGate.availableMilli))
+        const leftoverOk = near(leftover, 0) || (prevForGate !== undefined && prevForGate.availableMilli < 0 && near(leftover, -prevForGate.availableMilli))
         if (!leftoverOk) continue
         const positives = members.filter((t) => t.amount > 0).sort(byDate)
         const negatives = members.filter((t) => t.amount < 0).sort(byDate)

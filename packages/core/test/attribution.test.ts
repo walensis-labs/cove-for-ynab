@@ -127,4 +127,15 @@ describe('attributeChanges — leftover gate (second review fix)', () => {
     const res = attributeChanges([pt('2025-02', -3322550, 100000)], trio)
     expect(res[0]!.components).toEqual([{ cause: 'uncovered_spending', amountMilli: -3322550, evidence: { residualMilli: -3322550 } }])
   })
+  it('sub-dollar rounding leftover still matches as a reversal with an honest small residual', () => {
+    const trio = [
+      { id: 'p1', date: '2026-03-05', amount: 3322550, category_id: null, transfer_account_id: 'chk' },
+      { id: 'r1', date: '2026-03-10', amount: -3322550, category_id: null, transfer_account_id: null },
+      { id: 'p2', date: '2026-03-15', amount: 3322550, category_id: null, transfer_account_id: 'chk' },
+    ]
+    // gap change off by 500 milli ($0.50) from the trio's net — within EPS, so the match holds
+    const res = attributeChanges([pt('2026-02', 0, 100000), pt('2026-03', -3322050, 50000)], trio)
+    expect(res[0]!.components[0]).toMatchObject({ cause: 'payment_reversal', amountMilli: -3322550 })
+    expect(res[0]!.components[1]).toMatchObject({ cause: 'unattributed', amountMilli: 500 })
+  })
 })
