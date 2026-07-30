@@ -226,6 +226,22 @@ describe('backfillLedger', () => {
   })
 })
 
+// IMPORTANT 2: get_month_close_ledger's kind filter — "the last close" must mean the newest kind:'close'
+// record, not a backfill history row. LedgerStore.list already supports { kind }; this checks the
+// Ynab wrapper actually passes it through.
+describe('getMonthCloseLedger — kind filter passthrough', () => {
+  it('passes an explicit kind through to LedgerStore.list, leaving it unfiltered when omitted', () => {
+    const ledger = tempLedger()
+    ledger.append({ planId: 'p1', cutoff: '2026-07-31', gapStatus: 'final', perCard: [{ account: 'Visa', workingAsOf: -100, clearedAsOf: -100, availableAtMonthEnd: 100, gap: 0 }], blockers: { unapproved: 0, uncategorized: 0, unclearedBeforeCutoff: 0 } })
+    ledger.replaceBackfill('p1', 'Visa', [{ planId: 'p1', cutoff: '2026-06-30', gapStatus: 'final', perCard: [{ account: 'Visa', workingAsOf: -50, clearedAsOf: -50, availableAtMonthEnd: 50, gap: 0 }], blockers: { unapproved: 0, uncategorized: 0, unclearedBeforeCutoff: 0 } }])
+    const y = new Ynab({ client: { request: vi.fn() } as any, allowWrites: false, ledger })
+
+    expect(y.getMonthCloseLedger({ kind: 'close' }).records).toEqual([expect.objectContaining({ cutoff: '2026-07-31', kind: 'close' })])
+    expect(y.getMonthCloseLedger({ kind: 'backfill' }).records).toEqual([expect.objectContaining({ cutoff: '2026-06-30', kind: 'backfill' })])
+    expect(y.getMonthCloseLedger().records).toHaveLength(2)
+  })
+})
+
 // IMPORTANT 1: a mid-month run must not stamp the in-progress month as a final ledger record.
 describe('backfillLedger — in-progress month safety', () => {
   // Constant category balance ($200 available) and no transactions inside the completed month, but a

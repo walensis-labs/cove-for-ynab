@@ -798,7 +798,7 @@ export class Ynab {
     return this.ledger.append(record)
   }
 
-  getMonthCloseLedger(opts?: { limit?: number; cutoff?: string }): { records: MonthCloseRecord[]; note?: string } {
+  getMonthCloseLedger(opts?: { limit?: number; cutoff?: string; kind?: 'close' | 'backfill' }): { records: MonthCloseRecord[]; note?: string } {
     if (!this.ledger) return { records: [], note: 'No ledger configured' }
     return { records: this.ledger.list(opts) }
   }

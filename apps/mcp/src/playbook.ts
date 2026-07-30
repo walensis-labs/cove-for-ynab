@@ -28,7 +28,8 @@ short). Heed any \`warnings\` (unmatched or ambiguous cards are NOT covered by t
 **3. Attribution.** On first run (empty ledger), run \`backfill_ledger\` for each card first —
 it writes the historical balance-forward records and returns the discovery summary
 ("carrying $X since <date>"); lead with that. For each card with a non-zero gap, run
-\`credit_card_float_history\` from the last recorded close (check \`get_month_close_ledger\`) or
+\`credit_card_float_history\` from the last recorded close (check \`get_month_close_ledger\` with
+kind:'close' — backfill rows are history, not closes) or
 24 months on first run. Walk the \`changed:true\` points using \`direction\` ("grew" = float
 increased). For each change the user cares about, look for: that month's payment-category
 assignment (deliberate cover or drain), reversal pairs in the card's transactions

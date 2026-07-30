@@ -16,6 +16,19 @@ async function connect(ynab: Ynab) {
   return client
 }
 
+// backfill_ledger now only writes records for fully-elapsed months (IMPORTANT 1) — tests that need "a
+// month backfill_ledger will actually write" compute one relative to the real clock instead of
+// hardcoding a calendar month, which would eventually become "the current month" and start failing.
+function lastCompleteMonthUTC(): string {
+  const d = new Date()
+  const t = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1))
+  return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}`
+}
+function lastDayOfIso(month: string): string {
+  const [y, m] = month.split('-').map(Number) as [number, number]
+  return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10)
+}
+
 describe('server', () => {
   it('registers exactly 35 tools', async () => {
     const client = await connect(new Ynab({ client: { request: vi.fn() } as any, allowWrites: false }))
@@ -76,6 +89,7 @@ describe('server', () => {
   it('backfill_ledger writes backfill records and returns the discovery summary', async () => {
     const path = join(mkdtempSync(join(tmpdir(), 'ledger-')), 'ledger.json')
     const ledger = new LedgerStore(path)
+    const month = lastCompleteMonthUTC()
     const fake = { request: vi.fn(async (path: string) => {
       if (path.includes('/categories/')) { expect(path).toMatch(/\/categories\/pay-cat$/); return { category: { id: 'pay-cat', name: 'Visa', budgeted: 0, activity: 0, balance: 0 } } }
       if (path.endsWith('/accounts/card-acct')) return { account: { id: 'card-acct', name: 'Visa', balance: -100000 } }
@@ -83,13 +97,30 @@ describe('server', () => {
       throw new Error(`unmocked ${path}`)
     }) } as any
     const client = await connect(new Ynab({ client: fake, allowWrites: false, ledger }))
-    const res: any = await client.callTool({ name: 'backfill_ledger', arguments: { plan_id: 'p1', payment_category_id: 'pay-cat', card_account_id: 'card-acct', since_month: '2026-07', until_month: '2026-07' } })
+    const res: any = await client.callTool({ name: 'backfill_ledger', arguments: { plan_id: 'p1', payment_category_id: 'pay-cat', card_account_id: 'card-acct', since_month: month, until_month: month } })
     expect(res.isError).toBeUndefined()
     const body = JSON.parse(res.content[0].text)
     expect(body.account).toBe('Visa')
     expect(body.monthsWritten).toBe(1)
     expect(ledger.list({ kind: 'backfill' })).toHaveLength(1)
-    expect(ledger.list({ kind: 'backfill' })[0]!.cutoff).toBe('2026-07-31')
+    expect(ledger.list({ kind: 'backfill' })[0]!.cutoff).toBe(lastDayOfIso(month))
+  })
+  it('get_month_close_ledger passes kind through to the server call (IMPORTANT 2)', async () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'ledger-')), 'ledger.json')
+    const ledger = new LedgerStore(path)
+    ledger.append({ planId: 'p1', cutoff: '2026-07-31', gapStatus: 'final', perCard: [{ account: 'Visa', workingAsOf: -100, clearedAsOf: -100, availableAtMonthEnd: 100, gap: 0 }], blockers: { unapproved: 0, uncategorized: 0, unclearedBeforeCutoff: 0 } })
+    ledger.replaceBackfill('p1', 'Visa', [{ planId: 'p1', cutoff: '2026-06-30', gapStatus: 'final', perCard: [{ account: 'Visa', workingAsOf: -50, clearedAsOf: -50, availableAtMonthEnd: 50, gap: 0 }], blockers: { unapproved: 0, uncategorized: 0, unclearedBeforeCutoff: 0 } }])
+    const client = await connect(new Ynab({ client: { request: vi.fn() } as any, allowWrites: false, ledger }))
+
+    const closeRes: any = await client.callTool({ name: 'get_month_close_ledger', arguments: { kind: 'close' } })
+    const closeBody = JSON.parse(closeRes.content[0].text)
+    expect(closeBody.records).toHaveLength(1)
+    expect(closeBody.records[0].cutoff).toBe('2026-07-31')
+
+    const backfillRes: any = await client.callTool({ name: 'get_month_close_ledger', arguments: { kind: 'backfill' } })
+    const backfillBody = JSON.parse(backfillRes.content[0].text)
+    expect(backfillBody.records).toHaveLength(1)
+    expect(backfillBody.records[0].cutoff).toBe('2026-06-30')
   })
   it('read tool returns JSON content', async () => {
     const fake = { request: vi.fn(async () => ({ plans: [{ id: 'p1', name: 'Fam', last_modified_on: 'x', currency_format: { iso_code: 'USD' } }] })) } as any
