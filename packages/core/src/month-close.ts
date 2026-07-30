@@ -88,3 +88,53 @@ export function rankDonors(monthCats: RawMonthCat[], excludeIds: Set<string>) {
     .filter((d) => d.excessMilli > 0)
     .sort((a, b) => b.excessMilli - a.excessMilli)
 }
+
+export interface CoverageMove { fromId: string | null; fromName: string; toId: string; toName: string; amountMilli: number; source: 'category' | 'rta' }
+
+export function proposeMoves(
+  reds: RawMonthCat[],
+  donors: { cat: RawMonthCat; excessMilli: number }[],
+  rtaMilli: number,
+  strategy: 'donors_first' | 'rta_only',
+) {
+  const moves: CoverageMove[] = []
+  const unfundable: { id: string; name: string; neededMilli: number }[] = []
+  const pool = donors.map((d) => ({ id: d.cat.id, name: d.cat.name, remaining: d.excessMilli }))
+  let rtaRemaining = rtaMilli
+  let rtaUsed = 0
+  const sortedReds = [...reds].sort((a, b) => a.balance - b.balance) // most negative first
+
+  for (const red of sortedReds) {
+    const need = -red.balance
+    const rtaDraw = (): boolean => {
+      if (rtaRemaining < need) return false
+      moves.push({ fromId: null, fromName: 'Ready to Assign', toId: red.id, toName: red.name, amountMilli: need, source: 'rta' })
+      rtaRemaining -= need
+      rtaUsed += need
+      return true
+    }
+    if (strategy === 'rta_only') {
+      if (!rtaDraw()) unfundable.push({ id: red.id, name: red.name, neededMilli: need })
+      continue
+    }
+    // donors_first: tentatively slice donors, roll back if >3 slices or still short
+    const slices: { donor: (typeof pool)[number]; take: number }[] = []
+    let remaining = need
+    for (const donor of pool) {
+      if (remaining === 0 || slices.length === 3) break
+      if (donor.remaining <= 0) continue
+      const take = Math.min(donor.remaining, remaining)
+      slices.push({ donor, take })
+      remaining -= take
+    }
+    if (remaining === 0 && slices.length <= 3) {
+      for (const { donor, take } of slices) {
+        donor.remaining -= take
+        moves.push({ fromId: donor.id, fromName: donor.name, toId: red.id, toName: red.name, amountMilli: take, source: 'category' })
+      }
+    } else if (!rtaDraw()) {
+      unfundable.push({ id: red.id, name: red.name, neededMilli: need })
+    }
+  }
+  return { moves, unfundable, rtaUsedMilli: rtaUsed, rtaRemainingMilli: rtaRemaining }
+}

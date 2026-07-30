@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { asOfBalances, findBlockers, matchCards, findRedCategories, rankDonors, type RawAccount, type RawTxn, type RawMonthCat } from '../src/month-close.js'
+import { asOfBalances, findBlockers, matchCards, findRedCategories, rankDonors, proposeMoves, type RawAccount, type RawTxn, type RawMonthCat } from '../src/month-close.js'
 
 const acct = (o: Partial<RawAccount> = {}): RawAccount => ({
   id: 'a1', name: 'Citi Card', type: 'creditCard', on_budget: true, closed: false, deleted: false,
@@ -112,5 +112,41 @@ describe('findRedCategories / rankDonors', () => {
   it('donors rank by excess (target-aware), excluding reds and non-positive excess', () => {
     const donors = rankDonors(cats, new Set(['red']))
     expect(donors.map((d) => [d.cat.id, d.excessMilli])).toEqual([['d1', 412000], ['d2', 300000]])
+  })
+})
+
+describe('proposeMoves', () => {
+  const red = (id: string, name: string, balance: number) => cat({ id, name, balance })
+  it('donors_first covers reds from ranked donors, then RTA, tagging sources', () => {
+    const reds = [red('r1', 'Kid Things', -348170), red('r2', 'Medical', -172400)]
+    const donors = [{ cat: cat({ id: 'd1', name: 'Dining Out' }), excessMilli: 348170 }]
+    const res = proposeMoves(reds, donors, 7_178_050, 'donors_first')
+    expect(res.moves).toEqual([
+      { fromId: 'd1', fromName: 'Dining Out', toId: 'r1', toName: 'Kid Things', amountMilli: 348170, source: 'category' },
+      { fromId: null, fromName: 'Ready to Assign', toId: 'r2', toName: 'Medical', amountMilli: 172400, source: 'rta' },
+    ])
+    expect(res.rtaUsedMilli).toBe(172400)
+    expect(res.rtaRemainingMilli).toBe(7_178_050 - 172400)
+    expect(res.unfundable).toEqual([])
+  })
+  it('caps at 3 donor slices per red — falls back to one RTA draw', () => {
+    const reds = [red('r1', 'Big Red', -400000)]
+    const donors = ['d1', 'd2', 'd3', 'd4'].map((id, i) => ({ cat: cat({ id, name: id }), excessMilli: 100000 + i }))
+    const res = proposeMoves(reds, donors, 500000, 'donors_first')
+    expect(res.moves).toHaveLength(1)
+    expect(res.moves[0]).toMatchObject({ source: 'rta', amountMilli: 400000 })
+  })
+  it('never partially funds: insufficient donors+RTA puts the whole red in unfundable and frees donors for later reds', () => {
+    const reds = [red('r1', 'Huge', -900000), red('r2', 'Small', -50000)]
+    const donors = [{ cat: cat({ id: 'd1', name: 'D1' }), excessMilli: 60000 }]
+    const res = proposeMoves(reds, donors, 100000, 'donors_first')
+    expect(res.unfundable).toEqual([{ id: 'r1', name: 'Huge', neededMilli: 900000 }])
+    // r2 still covered by the donor that r1 tentatively consumed
+    expect(res.moves).toEqual([{ fromId: 'd1', fromName: 'D1', toId: 'r2', toName: 'Small', amountMilli: 50000, source: 'category' }])
+    expect(res.rtaUsedMilli).toBe(0)
+  })
+  it('rta_only ignores donors entirely', () => {
+    const res = proposeMoves([red('r1', 'R', -30000)], [{ cat: cat({ id: 'd1', name: 'D' }), excessMilli: 99000 }], 40000, 'rta_only')
+    expect(res.moves).toEqual([{ fromId: null, fromName: 'Ready to Assign', toId: 'r1', toName: 'R', amountMilli: 30000, source: 'rta' }])
   })
 })
