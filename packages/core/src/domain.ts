@@ -1,6 +1,7 @@
 import { YnabClient, YnabApiError } from './client.js'
 import { DeltaCache } from './delta-cache.js'
 import { UndoJournal, type InverseOp } from './undo-journal.js'
+import { LedgerStore, type MonthCloseRecord } from './ledger.js'
 import { milliToDollars, dollarsToMilli } from './money.js'
 import { applyFilters, aggregateTxns, TXN_FIELD_ALIASES, type TxnFilters } from './filters.js'
 import { spendingSummary, budgetHealth, detectRecurring, incomeVsExpense, netWorthHistory, monthWindowStart } from './analytics.js'
@@ -73,9 +74,10 @@ export class Ynab {
   readonly cache?: DeltaCache
   readonly journal?: UndoJournal
   readonly allowWrites: boolean
+  readonly ledger?: LedgerStore
 
-  constructor(opts: { client: YnabClient; cache?: DeltaCache; journal?: UndoJournal; allowWrites: boolean }) {
-    this.client = opts.client; this.cache = opts.cache; this.journal = opts.journal; this.allowWrites = opts.allowWrites
+  constructor(opts: { client: YnabClient; cache?: DeltaCache; journal?: UndoJournal; allowWrites: boolean; ledger?: LedgerStore }) {
+    this.client = opts.client; this.cache = opts.cache; this.journal = opts.journal; this.allowWrites = opts.allowWrites; this.ledger = opts.ledger
   }
 
   assertWrites(): void { if (!this.allowWrites) throw new WriteDisabledError() }
@@ -673,5 +675,15 @@ export class Ynab {
       note: 'gap = available − owed at month end. 0 = covered; negative = payment category short (float). A STATIC gap is carried history; months with changed:true are where new float appeared or was paid down.' +
         (h.pointsMilli.length === 0 ? ' WARNING: every month in the range was skipped (no data for this category) — the payment_category_id may be wrong.' : ''),
     }
+  }
+
+  recordMonthClose(record: Omit<MonthCloseRecord, 'id' | 'recordedAt'>): MonthCloseRecord {
+    if (!this.ledger) throw new Error('No ledger configured — this server was started without a LedgerStore.')
+    return this.ledger.append(record)
+  }
+
+  getMonthCloseLedger(opts?: { limit?: number; cutoff?: string }): { records: MonthCloseRecord[]; note?: string } {
+    if (!this.ledger) return { records: [], note: 'No ledger configured' }
+    return { records: this.ledger.list(opts) }
   }
 }

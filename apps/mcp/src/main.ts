@@ -1,7 +1,7 @@
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { Ynab, YnabClient, DeltaCache, UndoJournal, RateLimiter } from '@walensis/mcp-for-ynab-core'
+import { Ynab, YnabClient, DeltaCache, UndoJournal, LedgerStore, RateLimiter } from '@walensis/mcp-for-ynab-core'
 import { resolveEnv } from './env.js'
 import { buildServer } from './server.js'
 
@@ -13,6 +13,7 @@ const ynab = new Ynab({
   client: new YnabClient({ token, limiter }),
   cache: new DeltaCache(),
   journal: new UndoJournal(join(homedir(), '.mcp-for-ynab', 'undo.json')),
+  ledger: new LedgerStore(join(homedir(), '.mcp-for-ynab', 'ledger.json')),
   allowWrites,
 })
 const server = buildServer(ynab, limiter)

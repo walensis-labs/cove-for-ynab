@@ -77,4 +77,21 @@ export const tools: ToolDef[] = [
   { name: 'credit_card_float_history', description: "READ-ONLY: per-month credit-card float analysis over a range — the card's owed balance at each month end (backed out of the current balance) vs its payment category's available, the gap, and changed:true on months where the gap moved (new float appeared or was paid down; a static gap is just carried history). Pass the payment CATEGORY id and the card ACCOUNT id. For a single cutoff with blockers and donor proposals use month_close instead. Cost: ~one API call per month plus two. Each point carries gapChange and direction ('grew' = float increased).", schema: { plan_id: planId, payment_category_id: z.string().describe('the Credit Card Payments category id'), card_account_id: z.string().describe('the credit card account id'), since_month: z.string().describe("'YYYY-MM'"), until_month: z.string().describe("'YYYY-MM' inclusive") }, handler: (y, a) => y.getCreditCardFloatHistory(a.plan_id, { paymentCategoryId: a.payment_category_id, cardAccountId: a.card_account_id, sinceMonth: a.since_month, untilMonth: a.until_month }) },
   // ---- system
   { name: 'undo_last', description: 'Undo the most recent write made through this server (create/update/delete/assign/rename). One level at a time, up to 50 entries back.', write: true, schema: {}, handler: (y) => y.undoLast() },
+  // ---- ledger (local file only — never touches YNAB)
+  { name: 'record_month_close', description: 'Writes a LOCAL file only (~/.mcp-for-ynab/ledger.json) — never touches YNAB. Persist the balance-forward line at the end of a month-close session: per-card gaps, blocker counts, attributed causes, applied moves with reasons.', schema: {
+      plan_id: planId, cutoff: z.string().describe("ISO date cutoff, e.g. '2026-07-31'"), gap_status: z.enum(['provisional', 'final']),
+      per_card: z.array(z.object({ account: z.string(), working_as_of: z.number(), cleared_as_of: z.number(), available_at_month_end: z.number(), gap: z.number() })).min(1),
+      blockers: z.object({ unapproved: z.number().int(), uncategorized: z.number().int(), uncleared_before_cutoff: z.number().int() }),
+      causes: z.array(z.object({ month: z.string(), change: z.number(), cause: z.string(), narrative: z.string().optional() })).optional(),
+      moves: z.array(z.object({ from: z.string(), to: z.string(), amount: z.number(), source: z.enum(['category', 'rta']), reason: z.string().optional() })).optional(),
+      buffer: z.number().optional(), note: z.string().optional(),
+    }, handler: async (y, a) => y.recordMonthClose({
+      planId: a.plan_id, cutoff: a.cutoff, gapStatus: a.gap_status,
+      perCard: a.per_card.map((c: any) => ({ account: c.account, workingAsOf: c.working_as_of, clearedAsOf: c.cleared_as_of, availableAtMonthEnd: c.available_at_month_end, gap: c.gap })),
+      blockers: { unapproved: a.blockers.unapproved, uncategorized: a.blockers.uncategorized, unclearedBeforeCutoff: a.blockers.uncleared_before_cutoff },
+      causes: a.causes,
+      moves: a.moves?.map((m: any) => ({ from: m.from, to: m.to, amount: m.amount, source: m.source, reason: m.reason })),
+      buffer: a.buffer, note: a.note,
+    }) },
+  { name: 'get_month_close_ledger', description: 'Read past balance-forward records (newest first) — compare this close against the last one; optional cutoff filter.', schema: { limit: z.number().int().max(50).optional(), cutoff: z.string().optional() }, handler: async (y, a) => y.getMonthCloseLedger({ limit: a.limit, cutoff: a.cutoff }) },
 ]

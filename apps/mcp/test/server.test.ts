@@ -1,7 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { Ynab, RateLimiter } from '@walensis/mcp-for-ynab-core'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { Ynab, RateLimiter, LedgerStore } from '@walensis/mcp-for-ynab-core'
 import { buildServer } from '../src/server.js'
 import { resolveEnv } from '../src/env.js'
 
@@ -14,11 +17,27 @@ async function connect(ynab: Ynab) {
 }
 
 describe('server', () => {
-  it('registers exactly 32 tools', async () => {
+  it('registers exactly 34 tools', async () => {
     const client = await connect(new Ynab({ client: { request: vi.fn() } as any, allowWrites: false }))
     const { tools } = await client.listTools()
-    expect(tools).toHaveLength(32)
+    expect(tools).toHaveLength(34)
     expect(tools.map((t) => t.name)).toContain('list_transactions')
+  })
+  it('record_month_close persists and get_month_close_ledger reads it back', async () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'ledger-')), 'ledger.json')
+    const ledger = new LedgerStore(path)
+    const client = await connect(new Ynab({ client: { request: vi.fn() } as any, allowWrites: false, ledger }))
+    const recordRes: any = await client.callTool({ name: 'record_month_close', arguments: {
+      plan_id: 'p1', cutoff: '2026-07-31', gap_status: 'final',
+      per_card: [{ account: 'Citi', working_as_of: -3241.76, cleared_as_of: -3241.76, available_at_month_end: 2662.65, gap: -579.11 }],
+      blockers: { unapproved: 0, uncategorized: 0, uncleared_before_cutoff: 0 },
+    } })
+    expect(recordRes.isError).toBeUndefined()
+    const readRes: any = await client.callTool({ name: 'get_month_close_ledger', arguments: {} })
+    expect(readRes.isError).toBeUndefined()
+    const body = JSON.parse(readRes.content[0].text)
+    expect(body.records).toHaveLength(1)
+    expect(body.records[0].cutoff).toBe('2026-07-31')
   })
   it('month_close is registered read-only and returns the report', async () => {
     const fake = { request: vi.fn(async (path: string) => {
