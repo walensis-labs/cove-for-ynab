@@ -46,6 +46,28 @@ describe('targets and assignment', () => {
     expect(calls[2]!.path).toContain('c-from')
     expect(calls[2]!.body.category.budgeted).toBe(500000)
   })
+  it('assignBudget records reason in the journal description and echoes it', async () => {
+    const client = { request: vi.fn(async (path: string, opts: any) => {
+      if (!opts?.method) return { category: { id: 'c1', budgeted: 100000 } }
+      expect(JSON.stringify(opts.body)).not.toContain('cover Jul float') // never sent to YNAB
+      return { category: { id: 'c1', budgeted: 250000 } }
+    }) } as any
+    const y = new Ynab({ client, journal, allowWrites: true })
+    const res: any = await y.assignBudget('p1', '2026-07-01', 'c1', 250, '[suite] cover Jul float: payment reversal $3,322.55')
+    expect(res.reason).toBe('[suite] cover Jul float: payment reversal $3,322.55')
+    expect(journal.popLastCommitted()!.description).toMatch(/reason: \[suite\] cover Jul float/)
+  })
+  it('moveMoney records reason in the journal description and echoes it', async () => {
+    const client = { request: vi.fn(async (path: string, opts: any) => {
+      if (!opts?.method) return { category: { id: path.includes('c-from') ? 'c-from' : 'c-to', budgeted: 500000 } }
+      expect(JSON.stringify(opts.body)).not.toContain('rebalance float') // never sent to YNAB
+      return { category: {} }
+    }) } as any
+    const y = new Ynab({ client, journal, allowWrites: true })
+    const res: any = await y.moveMoney('p1', '2026-07-01', 'c-from', 'c-to', 100, '[suite] rebalance float between cards')
+    expect(res.reason).toBe('[suite] rebalance float between cards')
+    expect(journal.popLastCommitted()!.description).toMatch(/reason: \[suite\] rebalance float/)
+  })
 })
 
 describe('undoLast', () => {

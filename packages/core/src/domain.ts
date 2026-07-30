@@ -302,17 +302,18 @@ export class Ynab {
     return this.client.request<any>(`/plans/${planId}/months/${month}/categories/${categoryId}`, { method: 'PATCH', body: { category: { budgeted: budgetedMilli } } })
   }
 
-  async assignBudget(planId: string, month: string, categoryId: string, amount: number) {
+  async assignBudget(planId: string, month: string, categoryId: string, amount: number, reason?: string) {
     this.assertWrites()
     const prior = (await this.client.request<any>(`/plans/${planId}/months/${month}/categories/${categoryId}`)).category
-    const jid = this.journal?.begin(`assign ${amount} to category in ${month}`, [{ kind: 'assign_budget', planId, month, categoryId, budgetedMilli: prior.budgeted }])
+    const suffix = reason ? ` — reason: ${reason}` : ''
+    const jid = this.journal?.begin(`assign ${amount} to category in ${month}${suffix}`, [{ kind: 'assign_budget', planId, month, categoryId, budgetedMilli: prior.budgeted }])
     await this.#patchMonthCategory(planId, month, categoryId, dollarsToMilli(amount))
     if (jid) this.journal!.commit(jid)
     this.cache?.invalidate(planId)
-    return { month, categoryId, assigned: amount }
+    return { month, categoryId, assigned: amount, ...(reason ? { reason } : {}) }
   }
 
-  async moveMoney(planId: string, month: string, fromCategoryId: string, toCategoryId: string, amount: number) {
+  async moveMoney(planId: string, month: string, fromCategoryId: string, toCategoryId: string, amount: number, reason?: string) {
     this.assertWrites()
     const [from, to] = await Promise.all([
       this.client.request<any>(`/plans/${planId}/months/${month}/categories/${fromCategoryId}`),
@@ -321,7 +322,8 @@ export class Ynab {
     const fromPrior = from.category.budgeted as number
     const toPrior = to.category.budgeted as number
     const milli = dollarsToMilli(amount)
-    const jid = this.journal?.begin(`move ${amount} between categories in ${month}`, [
+    const suffix = reason ? ` — reason: ${reason}` : ''
+    const jid = this.journal?.begin(`move ${amount} between categories in ${month}${suffix}`, [
       { kind: 'assign_budget', planId, month, categoryId: fromCategoryId, budgetedMilli: fromPrior },
       { kind: 'assign_budget', planId, month, categoryId: toCategoryId, budgetedMilli: toPrior },
     ])
@@ -344,7 +346,7 @@ export class Ynab {
     }
     if (jid) this.journal!.commit(jid)
     this.cache?.invalidate(planId)
-    return { moved: amount, from: { id: fromCategoryId, assigned: milliToDollars(fromPrior - milli) }, to: { id: toCategoryId, assigned: milliToDollars(toPrior + milli) } }
+    return { moved: amount, from: { id: fromCategoryId, assigned: milliToDollars(fromPrior - milli) }, to: { id: toCategoryId, assigned: milliToDollars(toPrior + milli) }, ...(reason ? { reason } : {}) }
   }
 
   async renamePayee(planId: string, payeeId: string, name: string) {
