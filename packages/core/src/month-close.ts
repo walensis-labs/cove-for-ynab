@@ -38,9 +38,36 @@ const norm = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase()
 const isLive = (c: RawMonthCat) => !c.hidden && !c.deleted && !c.internal
 
 export function matchCards(accounts: RawAccount[], monthCats: RawMonthCat[]) {
-  const payCats = new Map(monthCats.filter((c) => !c.deleted && c.category_group_name === CC_GROUP).map((c) => [norm(c.name), c]))
+  const livePayCats = monthCats.filter((c) => !c.deleted && c.category_group_name === CC_GROUP)
+
+  // Detect normalized-name collisions
+  const nameCount = new Map<string, number>()
+  for (const c of livePayCats) {
+    const key = norm(c.name)
+    nameCount.set(key, (nameCount.get(key) ?? 0) + 1)
+  }
+
+  // Build map, skipping ambiguous names
+  const ambiguousNames = new Set<string>()
+  const payCats = new Map<string, RawMonthCat>()
+  for (const c of livePayCats) {
+    const key = norm(c.name)
+    if (nameCount.get(key)! > 1) {
+      ambiguousNames.add(key)
+    } else {
+      payCats.set(key, c)
+    }
+  }
+
   const matches: { account: RawAccount; category: RawMonthCat }[] = []
   const warnings: string[] = []
+
+  // Emit warnings for ambiguous names
+  for (const ambigName of ambiguousNames) {
+    warnings.push(`Multiple payment categories normalize to "${ambigName}" in Credit Card Payments — matching is ambiguous; affected card(s) are NOT covered by this report.`)
+  }
+
+  // Match accounts
   for (const a of accounts) {
     if (a.closed || a.deleted || a.type !== 'creditCard') continue
     const category = payCats.get(norm(a.name))

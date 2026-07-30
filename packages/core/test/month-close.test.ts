@@ -82,6 +82,18 @@ describe('matchCards', () => {
     expect(warnings).toHaveLength(1)
     expect(warnings[0]).toMatch(/Amex/)
   })
+  it('warns on ambiguous duplicate payment-category names instead of silently overwriting', () => {
+    const cards = [acct({ id: 'a1', name: 'Store Card' })]
+    const cats = [
+      cat({ id: 'p1', name: 'Store Card', category_group_name: 'Credit Card Payments' }),
+      cat({ id: 'p2', name: ' store  CARD ', category_group_name: 'Credit Card Payments' }),
+    ]
+    const { matches, warnings } = matchCards(cards, cats)
+    expect(matches).toHaveLength(0)
+    expect(warnings).toHaveLength(2)
+    expect(warnings.some((w) => w.includes('ambiguous'))).toBe(true)
+    expect(warnings.some((w) => w.includes('Store Card') && !w.includes('ambiguous'))).toBe(true)
+  })
 })
 
 describe('findRedCategories / rankDonors', () => {
