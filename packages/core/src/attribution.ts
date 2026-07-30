@@ -56,6 +56,13 @@ export function attributeChanges(points: AttributionMonthInput[], cardTxns: Card
         if (absAmount === 0) continue
         const k = Math.round(-remaining / absAmount)
         if (k !== 1 && k !== -1) continue
+        // leftover gate: reject matches whose post-reversal leftover is neither negligible nor
+        // exactly the prior red the absorption stage would claim next — closes the ~2/3x–2x
+        // false-positive band where an unrelated same-|amount| trio "explains" an unrelated gap.
+        const leftover = remaining + k * absAmount
+        const prevForGate = i > 0 ? points[i - 1] : undefined
+        const leftoverOk = Math.abs(leftover) <= FLOOR || (prevForGate !== undefined && prevForGate.availableMilli < 0 && near(leftover, -prevForGate.availableMilli))
+        if (!leftoverOk) continue
         const positives = members.filter((t) => t.amount > 0).sort(byDate)
         const negatives = members.filter((t) => t.amount < 0).sort(byDate)
         let evidence: CardTxn[]

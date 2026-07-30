@@ -97,3 +97,34 @@ describe('attributeChanges — reversal subset matching (review fix)', () => {
     expect(res[0]!.components).toEqual([{ cause: 'uncovered_spending', amountMilli: -100000, evidence: { residualMilli: -100000 } }])
   })
 })
+
+describe('attributeChanges — leftover gate (second review fix)', () => {
+  it('false positive rejection: an unrelated same-|amount| trio does not fabricate a reversal for an unrelated gap', () => {
+    // Shape matches k=+1's requirement (2 positives + 1 negative), so without the leftover gate
+    // this group passes the sign-count check and would fabricate a payment_reversal purely because
+    // |150000 − |−100000|| happens to round-trip to k=1. Leftover after applying it (−100000 +
+    // 150000 = +50000) is neither negligible nor the prior red (prior availableMilli is positive,
+    // so absorption can't claim it either) — the gate must reject it.
+    const unrelatedTrio = [
+      { id: 'a', date: '2026-03-05', amount: 150000, category_id: null, transfer_account_id: 'chk' },
+      { id: 'c', date: '2026-03-15', amount: -150000, category_id: 'c1', transfer_account_id: null },
+      { id: 'b', date: '2026-03-25', amount: 150000, category_id: null, transfer_account_id: 'chk' },
+    ]
+    const res = attributeChanges([pt('2026-02', 0, 500000), pt('2026-03', -100000, 400000)], unrelatedTrio)
+    expect(res[0]!.components).toEqual([{ cause: 'uncovered_spending', amountMilli: -100000, evidence: { residualMilli: -100000 } }])
+  })
+
+  it('window regression: txns beyond monthEnd+30d are excluded even though the old month-28+33d bound admitted them', () => {
+    // month = 2025-02 (28-day Feb). New correct bound: monthEnd(2025-02-28) + 30d = 2025-03-30.
+    // Old buggy bound: (month)-28 + 33d = 2025-04-02. These three dates sit strictly between
+    // the two bounds, so they must be excluded by the fixed window but would have been wrongly
+    // admitted (and would have formed a false payment_reversal) under the old arithmetic.
+    const trio = [
+      { id: 'pay1', date: '2025-03-31', amount: 3322550, category_id: null, transfer_account_id: 'chk' },
+      { id: 'rev1', date: '2025-04-01', amount: -3322550, category_id: null, transfer_account_id: null },
+      { id: 'pay2', date: '2025-04-02', amount: 3322550, category_id: null, transfer_account_id: 'chk' },
+    ]
+    const res = attributeChanges([pt('2025-02', -3322550, 100000)], trio)
+    expect(res[0]!.components).toEqual([{ cause: 'uncovered_spending', amountMilli: -3322550, evidence: { residualMilli: -3322550 } }])
+  })
+})
