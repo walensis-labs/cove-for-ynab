@@ -4,9 +4,11 @@ import { UndoJournal, type InverseOp } from './undo-journal.js'
 import { milliToDollars, dollarsToMilli } from './money.js'
 import { applyFilters, aggregateTxns, type TxnFilters } from './filters.js'
 import { spendingSummary, budgetHealth, detectRecurring, incomeVsExpense, netWorthHistory, monthWindowStart } from './analytics.js'
+import { asOfBalances, findBlockers, matchCards, findRedCategories, rankDonors, proposeMoves, type RawTxn, type RawAccount, type RawMonthCat } from './month-close.js'
 import type { CategorySnapshot, ScheduledSnapshot, Txn } from './types.js'
 
 const d = milliToDollars
+const BLOCKER_CAP = 50
 
 export class WriteDisabledError extends Error {
   constructor() {
@@ -526,5 +528,75 @@ export class Ynab {
 
   async getNetWorthHistory(planId: string) {
     return netWorthHistory(await this.#allTxns(planId, '2000-01-01'))
+  }
+
+  async #monthCloseRaw(planId: string, cutoff: string, lookbackDays: number) {
+    const lookback = Math.min(lookbackDays, 365)
+    const since = new Date(Date.parse(cutoff) - lookback * 86_400_000).toISOString().slice(0, 10)
+    const monthKey = cutoff.slice(0, 8) + '01'
+    const [accountsData, txnsData, monthData] = await Promise.all([
+      this.client.request<any>(`/plans/${planId}/accounts`),
+      this.client.request<any>(`/plans/${planId}/transactions`, { query: { since_date: since } }),
+      this.client.request<any>(`/plans/${planId}/months/${monthKey}`),
+    ])
+    const accounts = accountsData.accounts.filter((a: RawAccount) => !a.deleted) as RawAccount[]
+    const txns = txnsData.transactions as RawTxn[]
+    const monthCats = monthData.month.categories as RawMonthCat[]
+    return { accounts, txns, monthCats, rtaMilli: monthData.month.to_be_budgeted as number }
+  }
+
+  async monthClose(planId: string, opts: { cutoff: string; lookbackDays?: number }) {
+    const { cutoff } = opts
+    const { accounts, txns, monthCats } = await this.#monthCloseRaw(planId, cutoff, opts.lookbackDays ?? 120)
+    const warnings: string[] = []
+    const balances = asOfBalances(accounts, txns, cutoff)
+    const { matches, warnings: matchWarnings } = matchCards(accounts, monthCats)
+    warnings.push(...matchWarnings)
+    const perCard = matches.map(({ account, category }) => {
+      const b = balances.get(account.id)!
+      return {
+        account: account.name,
+        workingAsOf: milliToDollars(b.workingMilli),
+        clearedAsOf: milliToDollars(b.clearedMilli),
+        availableAtMonthEnd: milliToDollars(category.balance),
+        gap: milliToDollars(b.workingMilli + category.balance),
+        paymentCategoryId: category.id,
+      }
+    })
+    const onBudget = new Set(accounts.filter((a) => a.on_budget && !a.closed).map((a) => a.id))
+    const accountName = new Map(accounts.map((a) => [a.id, a.name]))
+    const raw = findBlockers(txns, cutoff, onBudget)
+    const row = (t: RawTxn) => ({ id: t.id, date: t.date, payee: t.payee_name ?? null, account: t.account_name ?? accountName.get(t.account_id) ?? t.account_id, amount: milliToDollars(t.amount) })
+    const cap = <T>(list: T[], label: string): T[] => {
+      if (list.length > BLOCKER_CAP) warnings.push(`${label}: showing ${BLOCKER_CAP} of ${list.length} — resolve and re-run.`)
+      return list.slice(0, BLOCKER_CAP)
+    }
+    const reds = findRedCategories(monthCats)
+    const donors = rankDonors(monthCats, new Set(reds.map((c) => c.id)))
+    return {
+      cutoff,
+      warnings,
+      perCard,
+      blockers: {
+        unapproved: cap(raw.unapproved, 'unapproved').map(row),
+        uncategorized: cap(raw.uncategorized, 'uncategorized').map(row),
+        unclearedBeforeCutoff: cap(raw.unclearedBeforeCutoff, 'unclearedBeforeCutoff').map(row),
+      },
+      redCategories: reds.map((c) => ({ id: c.id, name: c.name, available: milliToDollars(c.balance), group: c.category_group_name ?? '' })),
+      donors: donors.map((d) => ({ id: d.cat.id, name: d.cat.name, group: d.cat.category_group_name ?? '', available: milliToDollars(d.cat.balance), excess: milliToDollars(d.excessMilli), hasTarget: d.cat.goal_type != null })),
+    }
+  }
+
+  async proposeCoverage(planId: string, opts: { cutoff: string; strategy?: 'donors_first' | 'rta_only' }) {
+    const { monthCats, rtaMilli } = await this.#monthCloseRaw(planId, opts.cutoff, 120)
+    const reds = findRedCategories(monthCats)
+    const donors = rankDonors(monthCats, new Set(reds.map((c) => c.id)))
+    const res = proposeMoves(reds, donors, rtaMilli, opts.strategy ?? 'donors_first')
+    return {
+      moves: res.moves.map((m) => ({ from: m.fromName, fromId: m.fromId, to: m.toName, toId: m.toId, amount: milliToDollars(m.amountMilli), source: m.source })),
+      unfundable: res.unfundable.map((u) => ({ id: u.id, name: u.name, needed: milliToDollars(u.neededMilli) })),
+      rtaUsed: milliToDollars(res.rtaUsedMilli),
+      rtaRemaining: milliToDollars(res.rtaRemainingMilli),
+    }
   }
 }
