@@ -50,6 +50,16 @@ function lastDayOf(month: string): string {
   const [y, m] = month.split('-').map(Number) as [number, number]
   return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10)
 }
+/**
+ * The last fully-elapsed calendar month (UTC) as of `todayIso`, as 'YYYY-MM'. Pure and unit-testable
+ * on its own — backfillLedger uses it (against the real clock) to keep from writing a 'final' ledger
+ * record for a month that hasn't finished yet.
+ */
+export function lastCompleteMonth(todayIso: string): string {
+  const d = new Date(todayIso)
+  const prev = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1))
+  return `${prev.getUTCFullYear()}-${String(prev.getUTCMonth() + 1).padStart(2, '0')}`
+}
 
 export interface NewTxn {
   accountId: string; date: string; amount: number
@@ -734,7 +744,14 @@ export class Ynab {
     const untilMonth = opts.untilMonth ?? currentMonthUTC()
     const { account, series, attrByMonth } = await this.#attributedFloat(planId, { paymentCategoryId: opts.paymentCategoryId, cardAccountId: opts.cardAccountId, sinceMonth: opts.sinceMonth, untilMonth })
 
-    const records = series.map((p) => {
+    // Records are a historical ledger line, stamped gapStatus:'final' — only months that have actually
+    // finished get one. Writing the in-progress month would lie (a future cutoff, zero blockers, 'final'
+    // on a month that hasn't happened yet). The discovery summary below still walks the FULL `series`
+    // (including any in-progress month) since it needs the truest currentGap.
+    const recordsCutoffMonth = lastCompleteMonth(new Date().toISOString())
+    const recordableSeries = series.filter((p) => p.month <= recordsCutoffMonth)
+
+    const records = recordableSeries.map((p) => {
       const workingAsOf = milliToDollars(-p.owedMilli)
       const causes = (attrByMonth.get(p.month)?.components ?? []).map((c) => ({ month: p.month, change: milliToDollars(c.amountMilli), cause: c.cause as string }))
       return {
@@ -742,7 +759,7 @@ export class Ynab {
         perCard: [{ account, workingAsOf, clearedAsOf: workingAsOf, availableAtMonthEnd: milliToDollars(p.availableMilli), gap: milliToDollars(p.gapMilli) }],
         blockers: { unapproved: 0, uncategorized: 0, unclearedBeforeCutoff: 0 },
         causes,
-        note: 'backfill: cleared state not reconstructable historically',
+        note: 'backfill: cleared state not reconstructable historically, blockers not reconstructable',
       }
     })
     const written = this.ledger.replaceBackfill(planId, account, records)
@@ -757,9 +774,13 @@ export class Ynab {
     }
     const last = series[series.length - 1]
     const currentGap = milliToDollars(last?.gapMilli ?? 0)
+    // A negative gap is float (payment category short); a persistent POSITIVE gap is surplus, not float —
+    // don't call an overfunded payment category "float".
     const summary = nonZeroSince === null
       ? `Card is covered as of ${last?.month ?? untilMonth}.`
-      : `You've been carrying ${formatDollars(Math.abs(currentGap))} of float since ${sinceAtLeast ? 'at least ' : ''}${nonZeroSince}.`
+      : currentGap < 0
+        ? `You've been carrying ${formatDollars(Math.abs(currentGap))} of float since ${sinceAtLeast ? 'at least ' : ''}${nonZeroSince}.`
+        : `Your payment category has run a ${formatDollars(Math.abs(currentGap))} surplus since ${sinceAtLeast ? 'at least ' : ''}${nonZeroSince}.`
 
     const changePoints = series.filter((p) => p.changed).map((p) => {
       const a = attrByMonth.get(p.month)
