@@ -1,6 +1,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { z } from 'zod'
 import { Ynab, RateLimiter } from '@walensis/mcp-for-ynab-core'
 import { tools } from './tools.js'
+import { MONTH_CLOSE_PLAYBOOK } from './playbook.js'
 
 export function buildServer(ynab: Ynab, limiter: RateLimiter): McpServer {
   const server = new McpServer({ name: 'mcp-for-ynab', version: '0.1.0' })
@@ -17,5 +19,11 @@ export function buildServer(ynab: Ynab, limiter: RateLimiter): McpServer {
       }
     })
   }
+  server.registerPrompt('month-close-session', {
+    description: 'Guided month-close session (Balance → Plan): blocker-aware gaps, float attribution, donor-first coverage, balance-forward record.',
+    argsSchema: { cutoff: z.string().optional().describe("cutoff date, e.g. '2026-08-31'") },
+  }, ({ cutoff }) => ({
+    messages: [{ role: 'user' as const, content: { type: 'text' as const, text: `${cutoff ? `Cutoff: ${cutoff}.\n\n` : ''}${MONTH_CLOSE_PLAYBOOK}` } }],
+  }))
   return server
 }

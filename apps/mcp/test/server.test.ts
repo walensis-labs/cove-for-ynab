@@ -85,6 +85,17 @@ describe('server', () => {
     expect(res.isError).toBe(true)
     expect(res.content[0].text).toMatch(/YNAB_ALLOW_WRITES=1/)
   })
+  it('exposes the month-close-session prompt', async () => {
+    const client = await connect(new Ynab({ client: { request: vi.fn() } as any, allowWrites: false }))
+    const prompts = await client.listPrompts()
+    expect(prompts.prompts.map((p) => p.name)).toContain('month-close-session')
+    const got = await client.getPrompt({ name: 'month-close-session', arguments: { cutoff: '2026-08-31' } })
+    const text = (got.messages[0]!.content as any).text as string
+    expect(text).toContain('Cutoff: 2026-08-31')
+    expect(text).toContain('PROVISIONAL until blockers')
+    expect(text).toContain('never auto-approve')
+    expect(text).toContain('record_month_close')
+  })
 })
 
 describe('resolveEnv', () => {
