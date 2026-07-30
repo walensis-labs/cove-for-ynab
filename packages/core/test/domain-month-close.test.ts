@@ -55,12 +55,21 @@ describe('monthClose', () => {
     }) } as any
     await new Ynab({ client: c, allowWrites: false }).monthClose('last-used', { cutoff: '2026-07-31', lookbackDays: 9999 })
   })
+  it('clamps lookback to at least 1 day (never a since_date after the cutoff)', async () => {
+    const c = { request: vi.fn(async (path: string, opts?: any) => {
+      if (path.endsWith('/transactions')) { expect(opts.query.since_date).toBe('2026-07-30'); return { transactions: [] } }
+      if (path.endsWith('/accounts')) return accounts
+      return month
+    }) } as any
+    await new Ynab({ client: c, allowWrites: false }).monthClose('last-used', { cutoff: '2026-07-31', lookbackDays: -5 })
+  })
 })
 
 describe('proposeCoverage', () => {
-  it('covers the red from the donor and reports RTA in dollars', async () => {
+  it('covers the red from the donor, reports RTA in dollars, and names the target month', async () => {
     const y = new Ynab({ client: client(), allowWrites: false })
     const res = await y.proposeCoverage('last-used', { cutoff: '2026-07-31' })
+    expect(res.month).toBe('2026-07-01')
     expect(res.moves).toEqual([{ from: 'Dining Out', fromId: 'd1', to: 'Kid Things', toId: 'r1', amount: 348.17, source: 'category' }])
     expect(res.rtaUsed).toBe(0)
     expect(res.rtaRemaining).toBe(7178.05)

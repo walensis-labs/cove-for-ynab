@@ -531,7 +531,7 @@ export class Ynab {
   }
 
   async #monthCloseRaw(planId: string, cutoff: string, lookbackDays: number) {
-    const lookback = Math.min(lookbackDays, 365)
+    const lookback = Math.min(Math.max(lookbackDays, 1), 365)
     const since = new Date(Date.parse(cutoff) - lookback * 86_400_000).toISOString().slice(0, 10)
     const monthKey = cutoff.slice(0, 8) + '01'
     const [accountsData, txnsData, monthData] = await Promise.all([
@@ -593,6 +593,7 @@ export class Ynab {
     const donors = rankDonors(monthCats, new Set(reds.map((c) => c.id)))
     const res = proposeMoves(reds, donors, rtaMilli, opts.strategy ?? 'donors_first')
     return {
+      month: opts.cutoff.slice(0, 8) + '01',
       moves: res.moves.map((m) => ({ from: m.fromName, fromId: m.fromId, to: m.toName, toId: m.toId, amount: milliToDollars(m.amountMilli), source: m.source })),
       unfundable: res.unfundable.map((u) => ({ id: u.id, name: u.name, needed: milliToDollars(u.neededMilli) })),
       rtaUsed: milliToDollars(res.rtaUsedMilli),
