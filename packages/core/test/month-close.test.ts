@@ -1,9 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { asOfBalances, findBlockers, type RawAccount, type RawTxn } from '../src/month-close.js'
+import { asOfBalances, findBlockers, matchCards, findRedCategories, rankDonors, type RawAccount, type RawTxn, type RawMonthCat } from '../src/month-close.js'
 
 const acct = (o: Partial<RawAccount> = {}): RawAccount => ({
   id: 'a1', name: 'Citi Card', type: 'creditCard', on_budget: true, closed: false, deleted: false,
   balance: -3291760, cleared_balance: -3100000, ...o,
+})
+const cat = (o: Partial<RawMonthCat> = {}): RawMonthCat => ({
+  id: Math.random().toString(36).slice(2), name: 'X', category_group_name: 'Bills', hidden: false,
+  deleted: false, internal: false, balance: 0, goal_type: null, goal_target: null, ...o,
 })
 const txn = (o: Partial<RawTxn> = {}): RawTxn => ({
   id: Math.random().toString(36).slice(2), date: '2026-07-15', amount: -10000, cleared: 'cleared',
@@ -65,5 +69,36 @@ describe('findBlockers', () => {
     const tracking = txn({ id: 'tk', account_id: 'a9', category_id: null })
     const b = findBlockers([transfer, badSplit, okSplitDeadLeg, tracking], '2026-07-31', new Set(['a1']))
     expect(b.uncategorized.map((t) => t.id)).toEqual(['sp'])
+  })
+})
+
+describe('matchCards', () => {
+  it('matches by normalized name in the CC Payments group and warns on misses', () => {
+    const cards = [acct({ id: 'a1', name: ' Citi  Card ' }), acct({ id: 'a2', name: 'Amex' }), acct({ id: 'a3', name: 'Closed', closed: true })]
+    const cats = [cat({ id: 'p1', name: 'citi card', category_group_name: 'Credit Card Payments' }), cat({ id: 'nope', name: 'Amex', category_group_name: 'Bills' })]
+    const { matches, warnings } = matchCards(cards, cats)
+    expect(matches).toHaveLength(1)
+    expect(matches[0]).toMatchObject({ account: { id: 'a1' }, category: { id: 'p1' } })
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toMatch(/Amex/)
+  })
+})
+
+describe('findRedCategories / rankDonors', () => {
+  const cats = [
+    cat({ id: 'red', name: 'Kid Things', balance: -348170 }),
+    cat({ id: 'ccred', name: 'Visa', category_group_name: 'Credit Card Payments', balance: -100000 }),
+    cat({ id: 'int', name: 'Deferred', internal: true, balance: -5000 }),
+    cat({ id: 'hid', name: 'Hidden', hidden: true, balance: -5000 }),
+    cat({ id: 'd1', name: 'Dining', balance: 412000 }),
+    cat({ id: 'd2', name: 'Vacation', balance: 900000, goal_type: 'NEED', goal_target: 600000 }),
+    cat({ id: 'd3', name: 'Fully needed', balance: 100000, goal_type: 'NEED', goal_target: 100000 }),
+  ]
+  it('reds exclude CC payments, internal, hidden', () => {
+    expect(findRedCategories(cats).map((c) => c.id)).toEqual(['red'])
+  })
+  it('donors rank by excess (target-aware), excluding reds and non-positive excess', () => {
+    const donors = rankDonors(cats, new Set(['red']))
+    expect(donors.map((d) => [d.cat.id, d.excessMilli])).toEqual([['d1', 412000], ['d2', 300000]])
   })
 })

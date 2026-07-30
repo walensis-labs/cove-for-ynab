@@ -32,3 +32,32 @@ export function findBlockers(txns: RawTxn[], cutoff: string, onBudgetIds: Set<st
   }
   return { unapproved, uncategorized, unclearedBeforeCutoff }
 }
+
+export const CC_GROUP = 'Credit Card Payments'
+const norm = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase()
+const isLive = (c: RawMonthCat) => !c.hidden && !c.deleted && !c.internal
+
+export function matchCards(accounts: RawAccount[], monthCats: RawMonthCat[]) {
+  const payCats = new Map(monthCats.filter((c) => !c.deleted && c.category_group_name === CC_GROUP).map((c) => [norm(c.name), c]))
+  const matches: { account: RawAccount; category: RawMonthCat }[] = []
+  const warnings: string[] = []
+  for (const a of accounts) {
+    if (a.closed || a.deleted || a.type !== 'creditCard') continue
+    const category = payCats.get(norm(a.name))
+    if (category) matches.push({ account: a, category })
+    else warnings.push(`No payment category found for credit card account "${a.name}" — it is NOT covered by this report.`)
+  }
+  return { matches, warnings }
+}
+
+export function findRedCategories(monthCats: RawMonthCat[]): RawMonthCat[] {
+  return monthCats.filter((c) => isLive(c) && c.category_group_name !== CC_GROUP && c.balance < 0)
+}
+
+export function rankDonors(monthCats: RawMonthCat[], excludeIds: Set<string>) {
+  return monthCats
+    .filter((c) => isLive(c) && c.category_group_name !== CC_GROUP && c.balance > 0 && !excludeIds.has(c.id))
+    .map((cat) => ({ cat, excessMilli: cat.goal_type != null ? cat.balance - (cat.goal_target ?? 0) : cat.balance }))
+    .filter((d) => d.excessMilli > 0)
+    .sort((a, b) => b.excessMilli - a.excessMilli)
+}
