@@ -283,3 +283,12 @@ Tool: `backfill_ledger` — description: `"Backfill the LOCAL balance-forward le
 
 1. Full suites green; 35 tools; three copies byte-identical.
 2. AJ live: re-run `pnpm validate:fixtures` (unchanged — data layer regression), then in Claude Code: `backfill_ledger` on the Chase pair since 2024-08 → discovery line should read the −865.75 story with `sinceAtLeast: true`; `get_month_close_ledger` shows the backfill records plus the real dogfood close untouched; `credit_card_float_history` on the same range shows causes on every §12 change month matching the spec table (esp. 2026-04 payment_reversal with the trio ids, 2026-07 compound).
+
+---
+
+## AMENDMENT (2026-07-30, during execution)
+
+Task 1's embedded reference implementation contained two review-caught defects — do NOT re-copy it:
+1. `windowTxns` end bound `month-28 + 33d` overshoots real `monthEnd + 30d` (February bleeds into April). Corrected: exact month end via `Date.UTC(y, m, 0)`.
+2. Whole-group net matching lets a same-|amount| bystander suppress a genuine reversal. Corrected: subset matching — k = round(−remaining/X) ∈ {±1}, both signs required (k=1: ≥2 pos + ≥1 neg), evidence = 2 earliest same-sign + between-dates opposite txn.
+The spec's classifier section carries the corrected semantics; three additional regression tests (bystander, partial-reversal-then-absorption, equal-pair rejection) are binding alongside the original table.
