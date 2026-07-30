@@ -7,10 +7,23 @@ import { applyFilters, aggregateTxns, TXN_FIELD_ALIASES, type TxnFilters } from 
 import { spendingSummary, budgetHealth, detectRecurring, incomeVsExpense, netWorthHistory, monthWindowStart } from './analytics.js'
 import { asOfBalances, findBlockers, matchCards, findRedCategories, rankDonors, proposeMoves, type RawTxn, type RawAccount, type RawMonthCat } from './month-close.js'
 import { monthRange, floatSeries } from './category-history.js'
+import { attributeChanges, type AttributionComponent, type GapCause } from './attribution.js'
 import type { CategorySnapshot, ScheduledSnapshot, Txn } from './types.js'
 
 const d = milliToDollars
 const BLOCKER_CAP = 50
+
+function toEvidenceComponent(c: AttributionComponent) {
+  const { cause, amountMilli, evidence } = c
+  return {
+    cause,
+    amount: milliToDollars(amountMilli),
+    ...(evidence.assignedMilli !== undefined ? { assigned: milliToDollars(evidence.assignedMilli) } : {}),
+    ...(evidence.priorRedMilli !== undefined ? { priorRed: milliToDollars(evidence.priorRedMilli) } : {}),
+    ...(evidence.residualMilli !== undefined ? { residual: milliToDollars(evidence.residualMilli) } : {}),
+    ...(evidence.txns !== undefined ? { txns: evidence.txns.map((t) => ({ id: t.id, date: t.date, amount: milliToDollars(t.amountMilli) })) } : {}),
+  }
+}
 
 export class WriteDisabledError extends Error {
   constructor() {
@@ -668,9 +681,25 @@ export class Ynab {
       txnsData.transactions,
       accountData.account.balance,
     )
+    const assignedByMonth = new Map(h.pointsMilli.map((p) => [p.month, p.assignedMilli]))
+    const attributed = attributeChanges(
+      series.map((p) => ({ month: p.month, gapChangeMilli: p.gapChangeMilli, availableMilli: p.availableMilli, assignedMilli: assignedByMonth.get(p.month) ?? 0 })),
+      txnsData.transactions,
+    )
+    const attrByMonth = new Map(attributed.map((a) => [a.month, a]))
     return {
       account: accountData.account.name as string,
-      points: series.map((p) => ({ month: p.month, owed: milliToDollars(p.owedMilli), available: milliToDollars(p.availableMilli), gap: milliToDollars(p.gapMilli), changed: p.changed, gapChange: milliToDollars(p.gapChangeMilli), direction: p.direction })),
+      points: series.map((p): {
+        month: string; owed: number; available: number; gap: number; changed: boolean; gapChange: number
+        direction: 'grew' | 'shrank' | 'flat'; cause?: GapCause; evidence?: { components: ReturnType<typeof toEvidenceComponent>[] }
+      } => {
+        const base = { month: p.month, owed: milliToDollars(p.owedMilli), available: milliToDollars(p.availableMilli), gap: milliToDollars(p.gapMilli), changed: p.changed, gapChange: milliToDollars(p.gapChangeMilli), direction: p.direction }
+        if (!p.changed) return base
+        const a = attrByMonth.get(p.month)
+        if (!a || a.components.length === 0) return base
+        const primary = a.components.reduce((best, c) => (Math.abs(c.amountMilli) > Math.abs(best.amountMilli) ? c : best))
+        return { ...base, cause: primary.cause, evidence: { components: a.components.map(toEvidenceComponent) } }
+      }),
       skippedMonths: h.skippedMonths,
       note: 'gap = available − owed at month end. 0 = covered; negative = payment category short (float). A STATIC gap is carried history; months with changed:true are where new float appeared or was paid down.' +
         (h.pointsMilli.length === 0 ? ' WARNING: every month in the range was skipped (no data for this category) — the payment_category_id may be wrong.' : ''),
