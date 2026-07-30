@@ -5,6 +5,7 @@ import { milliToDollars, dollarsToMilli } from './money.js'
 import { applyFilters, aggregateTxns, type TxnFilters } from './filters.js'
 import { spendingSummary, budgetHealth, detectRecurring, incomeVsExpense, netWorthHistory, monthWindowStart } from './analytics.js'
 import { asOfBalances, findBlockers, matchCards, findRedCategories, rankDonors, proposeMoves, type RawTxn, type RawAccount, type RawMonthCat } from './month-close.js'
+import { monthRange, floatSeries } from './category-history.js'
 import type { CategorySnapshot, ScheduledSnapshot, Txn } from './types.js'
 
 const d = milliToDollars
@@ -598,6 +599,61 @@ export class Ynab {
       unfundable: res.unfundable.map((u) => ({ id: u.id, name: u.name, needed: milliToDollars(u.neededMilli) })),
       rtaUsed: milliToDollars(res.rtaUsedMilli),
       rtaRemaining: milliToDollars(res.rtaRemainingMilli),
+    }
+  }
+
+  async #fetchMonthCategory(planId: string, monthIso: string, categoryId: string): Promise<any | null> {
+    try {
+      return (await this.client.request<any>(`/plans/${planId}/months/${monthIso}/categories/${categoryId}`)).category
+    } catch (e) {
+      if (e instanceof YnabApiError && e.status === 404) return null // month predates the plan
+      throw e
+    }
+  }
+
+  async #categoryHistoryMilli(planId: string, opts: { categoryId: string; sinceMonth: string; untilMonth: string }) {
+    const months = monthRange(opts.sinceMonth, opts.untilMonth)
+    const BATCH = 6
+    const rows: { month: string; cat: any | null }[] = []
+    for (let i = 0; i < months.length; i += BATCH) {
+      const batch = months.slice(i, i + BATCH)
+      const cats = await Promise.all(batch.map((m) => this.#fetchMonthCategory(planId, m, opts.categoryId)))
+      batch.forEach((m, j) => rows.push({ month: m.slice(0, 7), cat: cats[j] }))
+    }
+    const name = rows.find((r) => r.cat)?.cat.name ?? null
+    return {
+      name,
+      skippedMonths: rows.filter((r) => !r.cat).map((r) => r.month),
+      pointsMilli: rows.filter((r) => r.cat).map((r) => ({
+        month: r.month, assignedMilli: r.cat.budgeted as number, activityMilli: r.cat.activity as number, availableMilli: r.cat.balance as number,
+      })).sort((a, b) => a.month.localeCompare(b.month)),
+    }
+  }
+
+  async getCategoryHistory(planId: string, opts: { categoryId: string; sinceMonth: string; untilMonth: string }) {
+    const h = await this.#categoryHistoryMilli(planId, opts)
+    return {
+      category: { id: opts.categoryId, name: h.name },
+      points: h.pointsMilli.map((p) => ({ month: p.month, assigned: milliToDollars(p.assignedMilli), activity: milliToDollars(p.activityMilli), available: milliToDollars(p.availableMilli) })),
+      skippedMonths: h.skippedMonths,
+    }
+  }
+
+  async getCreditCardFloatHistory(planId: string, opts: { paymentCategoryId: string; cardAccountId: string; sinceMonth: string; untilMonth: string }) {
+    const [h, accountData, txnsData] = await Promise.all([
+      this.#categoryHistoryMilli(planId, { categoryId: opts.paymentCategoryId, sinceMonth: opts.sinceMonth, untilMonth: opts.untilMonth }),
+      this.client.request<any>(`/plans/${planId}/accounts/${opts.cardAccountId}`),
+      this.client.request<any>(`/plans/${planId}/accounts/${opts.cardAccountId}/transactions`, { query: { since_date: `${opts.sinceMonth}-01` } }),
+    ])
+    const series = floatSeries(
+      h.pointsMilli.map((p) => ({ month: p.month, availableMilli: p.availableMilli })),
+      txnsData.transactions,
+      accountData.account.balance,
+    )
+    return {
+      account: accountData.account.name as string,
+      points: series.map((p) => ({ month: p.month, owed: milliToDollars(p.owedMilli), available: milliToDollars(p.availableMilli), gap: milliToDollars(p.gapMilli), changed: p.changed })),
+      note: 'gap = available − owed at month end. 0 = covered; negative = payment category short (float). A STATIC gap is carried history; months with changed:true are where new float appeared or was paid down.',
     }
   }
 }
