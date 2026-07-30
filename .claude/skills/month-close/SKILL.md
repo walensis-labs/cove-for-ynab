@@ -26,7 +26,10 @@ ONLY what the user approves via `update_transactions` (categorize + approve toge
 approve without the user seeing the categorization). Uncleared-before-cutoff rows are for the
 reconciliation step — note them, don't force them.
 
-**2. Trusted gap.** Re-run `month_close` until `gapStatus` is "final". Present per-card:
+**2. Trusted gap.** Re-run `month_close` until `gapStatus` is "final". If only
+`unclearedBeforeCutoff` blockers remain (transactions still pending at the bank), the gap
+stays provisional — present it WITH that caveat and continue; never force-clear
+transactions to chase a "final" status. Present per-card:
 working/cleared as-of balances, available at month end, and the gap (0 = covered; negative =
 short). Heed any `warnings` (unmatched or ambiguous cards are NOT covered by the report).
 
@@ -56,7 +59,7 @@ buffer category's balance via `get_category_history`, minus any rollover absorpt
 step 3. State it plainly: "Your true new-month starting number is $X."
 
 **7. Fund the month.** Walk underfunded targets (`month_close` reds / `get_month`
-goal_under_funded) and assign with the user's approval (`assign_budget`, with reasons). Per-card
+goalUnderFunded) and assign with the user's approval (`assign_budget`, with reasons). Per-card
 safe-to-pay = that card's payment category available — state it for each card.
 
 **8. Done line.** One sentence: "<Month> balanced. <Next month> funded. All cards covered.
