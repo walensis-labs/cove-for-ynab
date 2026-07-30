@@ -30,7 +30,8 @@ export function monthRange(sinceMonth: string, untilMonth: string): string[] {
 export interface FloatPoint { month: string; owedMilli: number; availableMilli: number; gapMilli: number; changed: boolean }
 
 export function floatSeries(
-  avail: { month: string; availableMilli: number }[],
+  avail: { month: string; availableMilli: number }[], // ascending by month — changed flags compare consecutive points
+
   txns: { date: string; amount: number; deleted?: boolean }[],
   currentBalanceMilli: number,
 ): FloatPoint[] {

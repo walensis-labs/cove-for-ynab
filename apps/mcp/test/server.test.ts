@@ -40,6 +40,20 @@ describe('server', () => {
     expect(body.points).toHaveLength(2)
     expect(body.category.id).toBe('c1')
   })
+  it('credit_card_float_history wires both ids to the right endpoints', async () => {
+    const fake = { request: vi.fn(async (path: string) => {
+      if (path.includes('/categories/')) { expect(path).toMatch(/\/categories\/pay-cat$/); return { category: { id: 'pay-cat', name: 'Visa', budgeted: 0, activity: 0, balance: 100000 } } }
+      if (path.endsWith('/accounts/card-acct')) return { account: { id: 'card-acct', name: 'Visa', balance: -100000 } }
+      if (path.endsWith('/accounts/card-acct/transactions')) return { transactions: [] }
+      throw new Error(`unmocked ${path}`)
+    }) } as any
+    const client = await connect(new Ynab({ client: fake, allowWrites: false }))
+    const res: any = await client.callTool({ name: 'credit_card_float_history', arguments: { plan_id: 'p1', payment_category_id: 'pay-cat', card_account_id: 'card-acct', since_month: '2026-07', until_month: '2026-07' } })
+    expect(res.isError).toBeUndefined()
+    const body = JSON.parse(res.content[0].text)
+    expect(body.points).toEqual([{ month: '2026-07', owed: 100, available: 100, gap: 0, changed: false }])
+    expect(body.skippedMonths).toEqual([])
+  })
   it('read tool returns JSON content', async () => {
     const fake = { request: vi.fn(async () => ({ plans: [{ id: 'p1', name: 'Fam', last_modified_on: 'x', currency_format: { iso_code: 'USD' } }] })) } as any
     const client = await connect(new Ynab({ client: fake, allowWrites: false }))

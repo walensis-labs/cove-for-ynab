@@ -51,6 +51,7 @@ describe('getCreditCardFloatHistory', () => {
     const y = new Ynab({ client: c, allowWrites: false })
     const res = await y.getCreditCardFloatHistory('last-used', { paymentCategoryId: 'p1', cardAccountId: 'a1', sinceMonth: '2026-06', untilMonth: '2026-08' })
     expect(res.account).toBe('Citi Card')
+    expect(res.skippedMonths).toEqual([])
     expect(res.points).toEqual([
       { month: '2026-06', owed: 500, available: 500, gap: 0, changed: false },
       { month: '2026-07', owed: 700, available: 500, gap: -200, changed: true },
