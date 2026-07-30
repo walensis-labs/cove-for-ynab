@@ -27,7 +27,7 @@ export function monthRange(sinceMonth: string, untilMonth: string): string[] {
   return out
 }
 
-export interface FloatPoint { month: string; owedMilli: number; availableMilli: number; gapMilli: number; changed: boolean }
+export interface FloatPoint { month: string; owedMilli: number; availableMilli: number; gapMilli: number; changed: boolean; gapChangeMilli: number; direction: 'grew' | 'shrank' | 'flat' }
 
 export function floatSeries(
   avail: { month: string; availableMilli: number }[], // ascending by month — changed flags compare consecutive points
@@ -43,7 +43,9 @@ export function floatSeries(
     const owedMilli = -(currentBalanceMilli - after)
     const gapMilli = p.availableMilli - owedMilli
     const changed = prevGap !== null && Math.abs(gapMilli - prevGap) > 5
+    const gapChangeMilli = prevGap === null ? 0 : gapMilli - prevGap
+    const direction = gapChangeMilli < -5 ? 'grew' : gapChangeMilli > 5 ? 'shrank' : 'flat'
     prevGap = gapMilli
-    return { month: p.month, owedMilli, availableMilli: p.availableMilli, gapMilli, changed }
+    return { month: p.month, owedMilli, availableMilli: p.availableMilli, gapMilli, changed, gapChangeMilli, direction }
   })
 }

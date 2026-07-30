@@ -51,7 +51,7 @@ describe('server', () => {
     const res: any = await client.callTool({ name: 'credit_card_float_history', arguments: { plan_id: 'p1', payment_category_id: 'pay-cat', card_account_id: 'card-acct', since_month: '2026-07', until_month: '2026-07' } })
     expect(res.isError).toBeUndefined()
     const body = JSON.parse(res.content[0].text)
-    expect(body.points).toEqual([{ month: '2026-07', owed: 100, available: 100, gap: 0, changed: false }])
+    expect(body.points).toEqual([{ month: '2026-07', owed: 100, available: 100, gap: 0, changed: false, gapChange: 0, direction: 'flat' }])
     expect(body.skippedMonths).toEqual([])
   })
   it('read tool returns JSON content', async () => {

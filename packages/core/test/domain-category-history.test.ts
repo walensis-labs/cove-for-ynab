@@ -53,10 +53,11 @@ describe('getCreditCardFloatHistory', () => {
     expect(res.account).toBe('Citi Card')
     expect(res.skippedMonths).toEqual([])
     expect(res.points).toEqual([
-      { month: '2026-06', owed: 500, available: 500, gap: 0, changed: false },
-      { month: '2026-07', owed: 700, available: 500, gap: -200, changed: true },
-      { month: '2026-08', owed: 1000, available: 1000, gap: 0, changed: true },
+      { month: '2026-06', owed: 500, available: 500, gap: 0, changed: false, gapChange: 0, direction: 'flat' },
+      { month: '2026-07', owed: 700, available: 500, gap: -200, changed: true, gapChange: -200, direction: 'grew' },
+      { month: '2026-08', owed: 1000, available: 1000, gap: 0, changed: true, gapChange: 200, direction: 'shrank' },
     ])
+    expect(res.points.map((p: any) => p.direction)).toEqual(['flat', 'grew', 'shrank'])
     const txnCall = c.request.mock.calls.find(([p]: any[]) => String(p).endsWith('/accounts/a1/transactions'))!
     expect(txnCall[1].query).toEqual({ since_date: '2026-06-01' })
   })

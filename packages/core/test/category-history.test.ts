@@ -49,4 +49,12 @@ describe('floatSeries', () => {
       [], -100000)
     expect(s.map((p) => [p.gapMilli, p.changed])).toEqual([[-100000, false], [-100000, false]])
   })
+  it('reports signed gap change and direction (grew = more negative)', () => {
+    const s = floatSeries(avail, txns, -1000000)
+    expect(s.map((p) => [p.month, p.gapChangeMilli, p.direction])).toEqual([
+      ['2026-06', 0, 'flat'],
+      ['2026-07', -200000, 'grew'],
+      ['2026-08', 200000, 'shrank'],
+    ])
+  })
 })

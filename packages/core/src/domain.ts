@@ -580,10 +580,14 @@ export class Ynab {
     }
     const reds = findRedCategories(monthCats)
     const donors = rankDonors(monthCats, new Set(reds.map((c) => c.id)))
+    const blockerCount = raw.unapproved.length + raw.uncategorized.length + raw.unclearedBeforeCutoff.length
+    const gapStatus = blockerCount === 0 ? 'final' as const : 'provisional' as const
     return {
       cutoff,
       warnings,
       perCard,
+      gapStatus,
+      blockerCount,
       blockers: {
         unapproved: cap(raw.unapproved, 'unapproved').map(row),
         uncategorized: cap(raw.uncategorized, 'uncategorized').map(row),
@@ -662,7 +666,7 @@ export class Ynab {
     )
     return {
       account: accountData.account.name as string,
-      points: series.map((p) => ({ month: p.month, owed: milliToDollars(p.owedMilli), available: milliToDollars(p.availableMilli), gap: milliToDollars(p.gapMilli), changed: p.changed })),
+      points: series.map((p) => ({ month: p.month, owed: milliToDollars(p.owedMilli), available: milliToDollars(p.availableMilli), gap: milliToDollars(p.gapMilli), changed: p.changed, gapChange: milliToDollars(p.gapChangeMilli), direction: p.direction })),
       skippedMonths: h.skippedMonths,
       note: 'gap = available − owed at month end. 0 = covered; negative = payment category short (float). A STATIC gap is carried history; months with changed:true are where new float appeared or was paid down.' +
         (h.pointsMilli.length === 0 ? ' WARNING: every month in the range was skipped (no data for this category) — the payment_category_id may be wrong.' : ''),

@@ -41,11 +41,33 @@ describe('monthClose', () => {
     expect(res.blockers.uncategorized.map((t) => t.id)).toEqual(['pend'])
     expect(res.redCategories).toEqual([{ id: 'r1', name: 'Kid Things', available: -348.17, group: 'Just for Fun' }])
     expect(res.donors[0]).toMatchObject({ id: 'd1', excess: 412, hasTarget: false })
+    expect(res.gapStatus).toBe('provisional') // the 'pend' txn is unapproved+uncategorized+uncleared before cutoff
+    expect(res.blockerCount).toBe(3)
   })
   it('cutoff=today identity: workingAsOf equals current balance when nothing post-dates it', async () => {
     const y = new Ynab({ client: client(), allowWrites: false })
     const res = await y.monthClose('last-used', { cutoff: '2026-08-31' })
     expect(res.perCard[0]).toMatchObject({ workingAsOf: -3291.76, clearedAsOf: -3291.76 })
+    // 'pend' (2026-07-20) still predates this cutoff too, so the shared fixture is not "clean" here —
+    // gapStatus is legitimately 'provisional', consistent with the first test. See the dedicated
+    // final/blockerCount:0 test below for the clean-fixture case.
+    expect(res.gapStatus).toBe('provisional')
+  })
+  it('gapStatus is final and blockerCount 0 when no blockers remain', async () => {
+    const cleanTxns = { transactions: [
+      txns.transactions[0]!,
+      { ...txns.transactions[1]!, approved: true, cleared: 'cleared', category_id: 'c9' },
+    ] }
+    const c = { request: vi.fn(async (path: string) => {
+      if (path.endsWith('/accounts')) return accounts
+      if (path.includes('/months/')) return month
+      if (path.endsWith('/transactions')) return cleanTxns
+      throw new Error(`unmocked ${path}`)
+    }) } as any
+    const y = new Ynab({ client: c, allowWrites: false })
+    const res = await y.monthClose('last-used', { cutoff: '2026-08-31' })
+    expect(res.gapStatus).toBe('final')
+    expect(res.blockerCount).toBe(0)
   })
   it('clamps lookback to 365 days', async () => {
     const c = { request: vi.fn(async (path: string, opts?: any) => {
