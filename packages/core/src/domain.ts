@@ -762,7 +762,9 @@ export class Ynab {
         note: 'backfill: cleared state not reconstructable historically, blockers not reconstructable',
       }
     })
-    const written = this.ledger.replaceBackfill(planId, account, records)
+    // Never wipe existing backfill history when this run produced nothing to write
+    // (e.g. a range containing no complete months) — replace only replaces with substance.
+    const written = records.length > 0 ? this.ledger.replaceBackfill(planId, account, records) : []
 
     // Walk backward from the newest point while the gap stays nonzero — that's the unbroken "carrying float" run.
     let nonZeroSince: string | null = null

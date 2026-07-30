@@ -287,4 +287,17 @@ describe('backfillLedger — in-progress month safety', () => {
     expect(res.discovery.currentGap).toBe(-300)
     expect(res.discovery.nonZeroSince).toBe(currentMonth)
   })
+  it('a zero-month run never wipes existing backfill history', async () => {
+    const ledger = tempLedger()
+    ledger.append({
+      kind: 'backfill', planId: 'last-used', cutoff: '2026-06-30', gapStatus: 'final',
+      perCard: [{ account: 'Citi Card', workingAsOf: -100, clearedAsOf: -100, availableAtMonthEnd: 100, gap: 0 }],
+      blockers: { unapproved: 0, uncategorized: 0, unclearedBeforeCutoff: 0 },
+    })
+    const currentMonth = monthOffset(0)
+    const y = new Ynab({ client: midMonthClient(currentMonth), allowWrites: false, ledger })
+    const res = await y.backfillLedger('last-used', { paymentCategoryId: 'p1', cardAccountId: 'a1', sinceMonth: currentMonth, untilMonth: currentMonth })
+    expect(res.monthsWritten).toBe(0)
+    expect(ledger.list({ kind: 'backfill' })).toHaveLength(1) // prior history intact
+  })
 })
