@@ -2,7 +2,7 @@
 
 A fast, safe MCP server for YNAB — full budget access for Claude and other AI assistants, read-only by default.
 
-32 tools covering budgets, transactions, categories, payees, accounts, scheduled transactions, and server-computed analytics (spending summaries, budget health, recurring charges, income vs. expense, net worth, month-close coverage, category and credit-card float history). Writes are off unless you explicitly turn them on, risky writes require confirmation, and writes that edit or delete existing data can be undone.
+34 tools covering budgets, transactions, categories, payees, accounts, scheduled transactions, and server-computed analytics (spending summaries, budget health, recurring charges, income vs. expense, net worth, month-close coverage, category and credit-card float history). Writes are off unless you explicitly turn them on, risky writes require confirmation, and writes that edit or delete existing data can be undone.
 
 ## Quickstart
 
@@ -105,7 +105,21 @@ The underlying API allows 200 requests/hour per token, shared across every app u
 | `propose_coverage` | read | Ordered move proposals to bring every overspent category to zero for the cutoff month. |
 | `get_category_history` | read | One category's monthly series (assigned/activity/available) across a month range. |
 | `credit_card_float_history` | read | Per-month credit-card float analysis over a range: owed vs. payment-category available, gap, changed flag. |
+| `record_month_close` | local write | Persist a month-close balance-forward record (per-card gaps, blockers, causes, applied moves). Local file only (`~/.mcp-for-ynab/ledger.json`) — never touches YNAB. |
+| `get_month_close_ledger` | read | Read past balance-forward records (newest first), optionally filtered by cutoff. |
 | `undo_last` | write | Undo the most recent write made through this server. |
+
+## The month-close session
+
+A guided monthly catch-up flow (Balance → Plan) built on top of the tools above: it works
+through blockers until the coverage gap is trusted, attributes credit-card float changes to
+their cause, proposes donor-first coverage moves, and — once you approve them — writes a
+balance-forward record via `record_month_close` so next month's session has a baseline to
+compare against (`get_month_close_ledger`).
+
+- **Claude Code**: use the `/month-close` skill.
+- **Claude Desktop and other MCP clients**: the server exposes the same flow as the `month-close-session` MCP prompt.
+- Full walkthrough: [docs/playbooks/month-close.md](./docs/playbooks/month-close.md).
 
 ## Development
 
@@ -122,6 +136,12 @@ To smoke-test against a real budget (read-only — it never writes):
 
 ```
 YNAB_ACCESS_TOKEN=xxx pnpm smoke
+```
+
+To validate `credit_card_float_history` against known-good fixture values (read-only):
+
+```
+YNAB_ACCESS_TOKEN=xxx pnpm validate:fixtures
 ```
 
 ## Disclaimer
