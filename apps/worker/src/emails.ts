@@ -22,7 +22,11 @@ export function formatAlert(
   causes: { cause: string; amount: number }[],
   month: string,
 ): EmailContent {
-  const direction = gapChange < 0 ? 'widened' : 'shrank'
+  // Covered is direction-neutral by construction — "shrank"/"widened" imply the gap is still open
+  // and moving; once it's ~0 there's nothing directional left to say, so use neutral copy ("moved")
+  // and drop the Fix nudge (there's nothing to fix).
+  const covered = Math.abs(gap) < COVERED_EPS
+  const direction = covered ? 'moved' : gapChange < 0 ? 'widened' : 'shrank'
   const subject = `${name}: payment-category gap ${direction} to ${formatDollars(gap)} (${month})`
 
   const lines: string[] = [
@@ -35,7 +39,7 @@ export function formatAlert(
     for (const c of causes) lines.push(`- ${c.cause}: ${formatDollars(c.amount)}`)
     lines.push('')
   }
-  lines.push(FIX_LINE)
+  lines.push(covered ? 'No action needed — the card is covered.' : FIX_LINE)
 
   return { subject, text: lines.join('\n') }
 }
@@ -43,17 +47,28 @@ export function formatAlert(
 /**
  * Weekly digest. §9.7 quiet-when-healthy: when every card's gap is ~0, the email is EXACTLY one
  * line — no per-card breakdown, no Fix line (there is nothing to fix).
+ *
+ * `gap` is omitted (and `error: true` set) when the caller's per-card fetch failed — CRITICAL 1:
+ * a dropped/missing card must never read as "healthy." The healthy one-liner therefore requires
+ * BOTH a non-empty card list AND every card carrying a real, ~0 gap; `cards.every(...)` on an
+ * empty array would otherwise be vacuously true (e.g. an expired PAT failing every fetch, or the
+ * default empty CARD_PAIRS) and fabricate "All cards covered."
  */
-export function formatWeeklyDigest(cards: { name: string; gap: number }[]): EmailContent {
-  const healthy = cards.every((c) => Math.abs(c.gap) < COVERED_EPS)
+export function formatWeeklyDigest(cards: { name: string; gap?: number; error?: boolean }[]): EmailContent {
+  const healthy = cards.length > 0 && cards.every((c) => !c.error && c.gap !== undefined && Math.abs(c.gap) < COVERED_EPS)
 
   if (healthy) {
     return { subject: 'All cards covered', text: 'All cards covered.' }
   }
 
-  const uncovered = cards.filter((c) => Math.abs(c.gap) >= COVERED_EPS)
-  const subject = `Weekly float check: ${uncovered.length} card${uncovered.length === 1 ? '' : 's'} need attention`
-  const lines = cards.map((c) => (Math.abs(c.gap) < COVERED_EPS ? `${c.name}: covered` : `${c.name}: gap ${formatDollars(c.gap)}`))
+  // Only cards needing attention (errored, or a real gap that isn't ~0) get a line — covered
+  // cards stay silent here too, same quiet-when-healthy spirit applied per-card.
+  const needsAttention = cards.filter((c) => c.error || c.gap === undefined || Math.abs(c.gap) >= COVERED_EPS)
+  const subject = `Weekly float check: ${needsAttention.length} card${needsAttention.length === 1 ? '' : 's'} need attention`
+  const lines = needsAttention.map((c) =>
+    c.error || c.gap === undefined ? `${c.name}: no data (fetch failed — check YNAB token/ids)` : `${c.name}: gap ${formatDollars(c.gap)}`,
+  )
+  lines.push('', FIX_LINE)
 
   return { subject, text: lines.join('\n') }
 }

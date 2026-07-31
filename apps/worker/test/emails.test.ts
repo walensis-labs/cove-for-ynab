@@ -23,6 +23,21 @@ describe('formatAlert', () => {
     expect(text).toContain('$400.00')
     expect(text).not.toContain('-$400.00')
   })
+
+  it('when the new gap is ~0 (covered), swaps the Fix line for "no action needed" and uses direction-neutral copy', () => {
+    const { subject, text } = formatAlert('Citi', 300, 0, [{ cause: 'deliberate_cover', amount: 300 }], '2026-07')
+    expect(subject).toContain('moved to $0.00')
+    expect(text).not.toContain('shrank')
+    expect(text).not.toContain('widened')
+    expect(text.trimEnd().endsWith('No action needed — the card is covered.')).toBe(true)
+    expect(text).not.toContain(FIX_LINE)
+  })
+
+  it('when the gap is NOT covered, keeps directional copy and the Fix line', () => {
+    const { text } = formatAlert('Citi', -300, -300, [{ cause: 'uncovered_spending', amount: -300 }], '2026-07')
+    expect(text).toContain('widened')
+    expect(text.trimEnd().endsWith(FIX_LINE)).toBe(true)
+  })
 })
 
 describe('formatWeeklyDigest', () => {
@@ -43,6 +58,43 @@ describe('formatWeeklyDigest', () => {
     expect(subject).not.toBe('All cards covered')
     expect(text).toContain('Citi')
     expect(text).toContain('$50.00')
+  })
+
+  it('unhealthy digest ends with the Fix line', () => {
+    const { text } = formatWeeklyDigest([{ name: 'Citi', gap: -50 }])
+    expect(text.trimEnd().endsWith(FIX_LINE)).toBe(true)
+  })
+
+  it('healthy one-liner never contains the Fix line and stays exactly one line', () => {
+    const { text } = formatWeeklyDigest([{ name: 'Citi', gap: 0 }])
+    expect(text).not.toContain(FIX_LINE)
+    expect(text.split('\n')).toHaveLength(1)
+  })
+
+  it('is NOT healthy on an empty card list (vacuous truth guard) — never fabricates "All cards covered"', () => {
+    const { subject, text } = formatWeeklyDigest([])
+    expect(subject).not.toBe('All cards covered')
+    expect(text).not.toContain('All cards covered.')
+  })
+
+  it('one error, one healthy card: error line present, healthy per-card line absent, not the healthy one-liner', () => {
+    const { subject, text } = formatWeeklyDigest([
+      { name: 'Citi', error: true },
+      { name: 'Amex', gap: 0 },
+    ])
+    expect(subject).not.toBe('All cards covered')
+    expect(text).toContain('Citi: no data (fetch failed — check YNAB token/ids)')
+    expect(text).not.toContain('Amex')
+  })
+
+  it('all cards errored: error lines only, plus the Fix line', () => {
+    const { text } = formatWeeklyDigest([
+      { name: 'Citi', error: true },
+      { name: 'Amex', error: true },
+    ])
+    expect(text).toContain('Citi: no data (fetch failed — check YNAB token/ids)')
+    expect(text).toContain('Amex: no data (fetch failed — check YNAB token/ids)')
+    expect(text.trimEnd().endsWith(FIX_LINE)).toBe(true)
   })
 })
 

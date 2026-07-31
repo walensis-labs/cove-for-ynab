@@ -221,19 +221,27 @@ async function hourlySweep(env: WorkerEnv): Promise<void> {
   }
 }
 
-/** Sunday weekly digest: one line when every card is covered, a per-card breakdown otherwise. */
+/**
+ * Sunday weekly digest: one line when every card is covered, a per-card breakdown otherwise.
+ *
+ * CRITICAL 1 fix: a per-card fetch failure must never silently drop the card from the digest —
+ * that would let `formatWeeklyDigest`'s healthy check pass vacuously on whatever cards happen to
+ * remain (or on an empty array, with an expired PAT/partial outage). Every pair yields an entry:
+ * `{ name, gap }` on success, `{ name, error: true }` on failure — never omitted.
+ */
 async function weeklyDigest(env: WorkerEnv): Promise<void> {
   const planId = env.PLAN_ID ?? 'last-used'
   const pairs = parseCardPairs(env.CARD_PAIRS)
   const client = new YnabClient({ token: env.YNAB_ACCESS_TOKEN, limiter: new RateLimiter() })
 
-  const cards: { name: string; gap: number }[] = []
+  const cards: { name: string; gap?: number; error?: boolean }[] = []
   for (const pair of pairs) {
     try {
       const { gapMilli } = await fetchGapMilli(client, planId, pair)
       cards.push({ name: pair.name, gap: milliToDollars(gapMilli) })
     } catch (e) {
       console.error(`weekly digest fetch failed for card "${pair.name}":`, e)
+      cards.push({ name: pair.name, error: true })
     }
   }
   await sendDigest(env, formatWeeklyDigest(cards))
@@ -270,7 +278,6 @@ async function monthlyReport(env: WorkerEnv): Promise<void> {
 
   const sections: MonthlySection[] = []
   for (const pair of pairs) {
-    const closedInLedger = closedCardsLastMonth.has(pair.name)
     try {
       const history = await ynab.getCreditCardFloatHistory(planId, {
         paymentCategoryId: pair.paymentCategoryId,
@@ -278,6 +285,12 @@ async function monthlyReport(env: WorkerEnv): Promise<void> {
         sinceMonth: monthBeforeLast,
         untilMonth: lastMonth,
       })
+      // `closeRecords[].perCard[].account` is the YNAB account NAME (see D1Ledger/domain.ts), so
+      // the probe key must be `history.account` (same field, same source) — NOT `pair.name`, which
+      // is CARD_PAIRS' free-form display label and need not match the YNAB account name at all.
+      // Probing with pair.name would silently mismatch on any budget where the two differ, always
+      // emitting "no close recorded" even right after a real /month-close run for this card.
+      const closedInLedger = closedCardsLastMonth.has(history.account)
       const raw = history.points.find((p) => p.month === lastMonth)
       // `raw` is undefined when the range fetch returned nothing for last month at all (e.g. wrong
       // ids) — that's Minor B's "no data" case, kept separate from a real, unchanged point.
@@ -288,7 +301,10 @@ async function monthlyReport(env: WorkerEnv): Promise<void> {
     } catch (e) {
       console.error(`monthly report fetch failed for card "${pair.name}":`, e)
       // A fetch failure is data we don't have, same as an absent point — report it honestly rather
-      // than silently dropping the card from the email.
+      // than silently dropping the card from the email. No `history.account` is available here (the
+      // fetch that would have produced it failed), so fall back to the CARD_PAIRS label — the best
+      // available approximation when we have nothing else to probe with.
+      const closedInLedger = closedCardsLastMonth.has(pair.name)
       sections.push(buildMonthlySection(pair.name, undefined, closedInLedger))
     }
   }
@@ -303,9 +319,22 @@ export default {
         await hourlySweep(env)
         break
       case CRON_WEEKLY:
+        // README's "CARD_PAIRS defaults to [] — nothing monitored, crons are no-ops" claim: the
+        // hourly loop is naturally a no-op on an empty pair list, but weeklyDigest/formatWeeklyDigest
+        // are NOT — an empty `cards` array must not reach formatWeeklyDigest and be misread as
+        // "nothing to report" via some other path, so skip the send outright rather than relying on
+        // formatWeeklyDigest's empty-array guard alone to keep the email silent.
+        if (parseCardPairs(env.CARD_PAIRS).length === 0) {
+          console.log('scheduled(): CARD_PAIRS is empty — weekly digest skipped')
+          break
+        }
         await weeklyDigest(env)
         break
       case CRON_MONTHLY:
+        if (parseCardPairs(env.CARD_PAIRS).length === 0) {
+          console.log('scheduled(): CARD_PAIRS is empty — monthly report skipped')
+          break
+        }
         await monthlyReport(env)
         break
       default:
