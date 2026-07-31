@@ -44,18 +44,16 @@ export function formatAlert(
  * Weekly digest. §9.7 quiet-when-healthy: when every card's gap is ~0, the email is EXACTLY one
  * line — no per-card breakdown, no Fix line (there is nothing to fix).
  */
-export function formatWeeklyDigest(cards: { name: string; gap: number }[], bufferNote?: string): EmailContent {
+export function formatWeeklyDigest(cards: { name: string; gap: number }[]): EmailContent {
   const healthy = cards.every((c) => Math.abs(c.gap) < COVERED_EPS)
 
   if (healthy) {
-    const suffix = bufferNote ? ` ${bufferNote}` : ''
-    return { subject: 'All cards covered', text: `All cards covered.${suffix}` }
+    return { subject: 'All cards covered', text: 'All cards covered.' }
   }
 
   const uncovered = cards.filter((c) => Math.abs(c.gap) >= COVERED_EPS)
   const subject = `Weekly float check: ${uncovered.length} card${uncovered.length === 1 ? '' : 's'} need attention`
   const lines = cards.map((c) => (Math.abs(c.gap) < COVERED_EPS ? `${c.name}: covered` : `${c.name}: gap ${formatDollars(c.gap)}`))
-  if (bufferNote) lines.push(bufferNote)
 
   return { subject, text: lines.join('\n') }
 }

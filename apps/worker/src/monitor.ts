@@ -21,8 +21,16 @@ export function alertSignature(cardKey: string, month: string, gapMilli: number)
  * goes red (gap < 0) while it was previously covered (lastGap ?? 0 >= 0) — the latter fires
  * regardless of threshold, since any red payment category is worth flagging immediately.
  * Never alerts on the first-ever observation (lastGapMilli === null): there is nothing to compare
- * against yet, so this call only establishes a baseline. A repeat of an already-alerted signature
- * (same card, month, and exact gap) is suppressed even if the underlying condition still holds.
+ * against yet, so this call only establishes a baseline.
+ *
+ * `signature` is returned (and expected to be persisted) for OBSERVABILITY only — e.g. correlating
+ * hourly runs in `wrangler tail` — it does not gate whether an alert fires. State-diff already
+ * prevents duplicate alerts on an unchanged gap (moved === 0; went_red requires lastGap >= 0, which
+ * an already-red card never has again). Signature-based suppression was tried and removed: it can
+ * silently drop a legitimate alert when an oscillating gap happens to revisit an exact value it
+ * alerted on before (e.g. −600k → −1M via sub-threshold drift → a real >threshold swing back to
+ * exactly −600k) purely because the two events share a signature, even though the second swing is
+ * its own independent, threshold-crossing event.
  */
 export function decideAlert(
   check: CardCheck,
@@ -40,8 +48,6 @@ export function decideAlert(
   const wentRed = check.gapMilli < 0 && lastGap >= 0
   const moved = Math.abs(check.gapMilli - lastGap) > thresholdMilli
   const reason: 'moved' | 'went_red' | null = wentRed ? 'went_red' : moved ? 'moved' : null
-  const triggered = wentRed || moved
-  const suppressed = signature === state.lastAlertSignature
 
-  return { alert: triggered && !suppressed, reason, signature }
+  return { alert: wentRed || moved, reason, signature }
 }

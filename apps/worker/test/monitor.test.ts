@@ -51,19 +51,52 @@ describe('decideAlert', () => {
     expect(result.reason).toBeNull()
   })
 
-  it('suppresses an alert whose signature matches lastAlertSignature, even though the underlying condition fires', () => {
-    const gapMilli = -500_000
-    const signature = alertSignature('citi', MONTH, gapMilli)
-    const state: MonitorState = { lastGapMilli: 100_000, lastAlertSignature: signature }
+  it('does not alert when the gap is unchanged from the last observation, regardless of the stored signature', () => {
+    const gapMilli = -600_000
+    const state: MonitorState = { lastGapMilli: gapMilli, lastAlertSignature: alertSignature('citi', MONTH, gapMilli) }
     const result = decideAlert(check({ gapMilli }), state, THRESHOLD, MONTH)
     expect(result.alert).toBe(false)
-    expect(result.signature).toBe(signature)
+    expect(result.reason).toBeNull()
   })
 
-  it('does not suppress when the signature differs from lastAlertSignature', () => {
-    const state: MonitorState = { lastGapMilli: 100_000, lastAlertSignature: 'citi:2026-06:999' }
-    const result = decideAlert(check({ gapMilli: 500_000 }), state, THRESHOLD, MONTH)
+  it('an oscillating gap is not suppressed by a stale alert signature — a real threshold-crossing swing back to a previously-alerted value still alerts', () => {
+    // Reproduces the exact regression traced in review: t1 alerts at −600k; t2/t3 drift further red
+    // in individually sub-threshold steps (no alert, so — under the OLD "only store on alert"
+    // policy — lastAlertSignature is never refreshed past t1's); t4 swings back +400k to EXACTLY
+    // −600k again, a real >threshold move, but its signature collides with the one stored at t1.
+    // Signature-based suppression would have silently dropped this legitimate alert; decideAlert no
+    // longer looks at lastAlertSignature at all, so t4 must still alert on the state-diff alone.
+    const cardKey = 'citi'
+    const buildCheck = (gapMilli: number) => check({ cardKey, gapMilli })
+
+    // t0: first-ever observation — establishes the baseline, never alerts.
+    let state: MonitorState = { lastGapMilli: null, lastAlertSignature: null }
+    let result = decideAlert(buildCheck(0), state, THRESHOLD, MONTH)
+    expect(result.alert).toBe(false)
+    state = { lastGapMilli: 0, lastAlertSignature: state.lastAlertSignature }
+
+    // t1: card goes red — alerts.
+    result = decideAlert(buildCheck(-600_000), state, THRESHOLD, MONTH)
     expect(result.alert).toBe(true)
+    expect(result.reason).toBe('went_red')
+    state = { lastGapMilli: -600_000, lastAlertSignature: result.signature } // worst case: only advances on alert
+
+    // t2: sub-threshold drift further red — no alert; stale signature from t1 is left untouched.
+    result = decideAlert(buildCheck(-800_000), state, THRESHOLD, MONTH)
+    expect(result.alert).toBe(false)
+    state = { lastGapMilli: -800_000, lastAlertSignature: state.lastAlertSignature }
+
+    // t3: another sub-threshold drift further red — still no alert, signature still stale from t1.
+    result = decideAlert(buildCheck(-1_000_000), state, THRESHOLD, MONTH)
+    expect(result.alert).toBe(false)
+    state = { lastGapMilli: -1_000_000, lastAlertSignature: state.lastAlertSignature }
+
+    // t4: a legitimate 400k swing back to exactly −600k — same signature as t1's alert, but a real,
+    // independent threshold-crossing event. Must alert.
+    result = decideAlert(buildCheck(-600_000), state, THRESHOLD, MONTH)
+    expect(result.alert).toBe(true)
+    expect(result.reason).toBe('moved')
+    expect(result.signature).toBe(state.lastAlertSignature) // proves the collision the old logic would've suppressed on
   })
 
   it('recovery from red to zero alerts as "moved" only when the swing exceeds the threshold', () => {

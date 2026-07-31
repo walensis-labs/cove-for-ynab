@@ -77,29 +77,36 @@ function previousMonth(month: string): string {
   return new Date(Date.UTC(y, m - 2, 1)).toISOString().slice(0, 7)
 }
 
-function lastDayOfMonth(month: string): string {
-  const [y, m] = month.split('-').map(Number) as [number, number]
-  return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10)
+/** Worker-persisted monitor state: `MonitorState` (decideAlert's pure contract) plus the last
+ *  observed `budgeted` figure, needed to compute an assignment DELTA between hourly checks rather
+ *  than feeding the whole month's `budgeted` total into a one-hour attribution point. */
+interface PersistedState extends MonitorState {
+  lastBudgetedMilli: number | null
 }
 
-async function readMonitorState(db: D1Database, cardKey: string): Promise<MonitorState> {
+async function readMonitorState(db: D1Database, cardKey: string): Promise<PersistedState> {
   const row = await db
-    .prepare('SELECT last_gap_milli, last_alert_signature FROM monitor_state WHERE card_key = ?')
+    .prepare('SELECT last_gap_milli, last_alert_signature, last_budgeted_milli FROM monitor_state WHERE card_key = ?')
     .bind(cardKey)
-    .first<{ last_gap_milli: number | null; last_alert_signature: string | null }>()
-  return { lastGapMilli: row?.last_gap_milli ?? null, lastAlertSignature: row?.last_alert_signature ?? null }
+    .first<{ last_gap_milli: number | null; last_alert_signature: string | null; last_budgeted_milli: number | null }>()
+  return {
+    lastGapMilli: row?.last_gap_milli ?? null,
+    lastAlertSignature: row?.last_alert_signature ?? null,
+    lastBudgetedMilli: row?.last_budgeted_milli ?? null,
+  }
 }
 
-async function writeMonitorState(db: D1Database, cardKey: string, state: MonitorState): Promise<void> {
+async function writeMonitorState(db: D1Database, cardKey: string, state: PersistedState): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO monitor_state (card_key, last_gap_milli, last_alert_signature, updated_at) VALUES (?, ?, ?, ?)
+      `INSERT INTO monitor_state (card_key, last_gap_milli, last_alert_signature, last_budgeted_milli, updated_at) VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(card_key) DO UPDATE SET
          last_gap_milli = excluded.last_gap_milli,
          last_alert_signature = excluded.last_alert_signature,
+         last_budgeted_milli = excluded.last_budgeted_milli,
          updated_at = excluded.updated_at`,
     )
-    .bind(cardKey, state.lastGapMilli, state.lastAlertSignature, new Date().toISOString())
+    .bind(cardKey, state.lastGapMilli, state.lastAlertSignature, state.lastBudgetedMilli, new Date().toISOString())
     .run()
 }
 
@@ -149,11 +156,19 @@ async function hourlySweep(env: WorkerEnv): Promise<void> {
 
       if (decision.alert) {
         const gapChangeMilli = gapMilli - (state.lastGapMilli ?? 0)
+        // Assignment DELTA since the last hourly check — not the whole month's `budgeted` total,
+        // which would massively overstate a single hour's deliberate-cover/drain contribution.
+        // First observation (no prior budgeted figure) → 0 delta.
+        const assignedDeltaMilli = budgetedMilli - (state.lastBudgetedMilli ?? budgetedMilli)
         const txnsData = await client.request<{ transactions: RawTxn[] }>(`/plans/${planId}/accounts/${pair.cardAccountId}/transactions`, {
           query: { since_date: `${month}-01` },
         })
+        // NOTE: a single hourly point has no "previous month" for attributeChanges to compare
+        // against, so its overpayment_absorption stage can never fire here (it only looks at
+        // points[i-1]). Near-rollover gap changes may therefore come back as unattributed/residual
+        // rather than absorption — that's the honest outcome given what's observable within an hour.
         const [attributed] = attributeChanges(
-          [{ month, gapChangeMilli, availableMilli, assignedMilli: budgetedMilli }],
+          [{ month, gapChangeMilli, availableMilli, assignedMilli: assignedDeltaMilli }],
           txnsData.transactions,
         )
         const causes = (attributed?.components ?? []).map((c) => ({ cause: c.cause as string, amount: milliToDollars(c.amountMilli) }))
@@ -161,10 +176,13 @@ async function hourlySweep(env: WorkerEnv): Promise<void> {
         await sendDigest(env, email)
       }
 
-      // Upserted every check (alert or not); the signature only advances when an alert actually fired.
+      // Upserted every check (alert or not); lastAlertSignature is now stored purely for
+      // observability (decideAlert no longer uses it to suppress) — always advance it to the
+      // latest computed signature.
       await writeMonitorState(env.DB, cardKey, {
         lastGapMilli: gapMilli,
-        lastAlertSignature: decision.alert ? decision.signature : state.lastAlertSignature,
+        lastAlertSignature: decision.signature,
+        lastBudgetedMilli: budgetedMilli,
       })
     } catch (e) {
       // One card's failure must never kill the sweep for the rest — logged for `wrangler tail`.
@@ -191,24 +209,50 @@ async function weeklyDigest(env: WorkerEnv): Promise<void> {
   await sendDigest(env, formatWeeklyDigest(cards))
 }
 
-/** 1st-of-month close report: current gap per card + last month's recorded causes, if any. */
+/**
+ * 1st-of-month close report: per-card gap/gapChange/causes for last month, sourced LIVE from
+ * `ynab.getCreditCardFloatHistory` (the same inline-attribution pipeline `credit_card_float_history`
+ * uses) — never from the ledger. A recorded `MonthCloseRecord` can bundle multiple cards behind one
+ * flat `causes` list with no per-card tag; deriving each card's section from that would leak every
+ * other closed card's causes (and their summed gapChange) into this card's line. The ledger is
+ * still consulted, but ONLY to detect whether a `/month-close` session actually ran for THIS card
+ * last month (any `kind:'close'` record whose `cutoff` falls in last month AND whose `perCard`
+ * includes this card's account name) — when absent, the live gap/gapChange are shown but causes are
+ * suppressed in favor of the pure module's "no close recorded" nudge, since that live-vs-recorded
+ * distinction is exactly what's supposed to prompt the user to run `/month-close` for real
+ * record-keeping.
+ */
 async function monthlyReport(env: WorkerEnv): Promise<void> {
   const planId = env.PLAN_ID ?? 'last-used'
   const pairs = parseCardPairs(env.CARD_PAIRS)
   const client = new YnabClient({ token: env.YNAB_ACCESS_TOKEN, limiter: new RateLimiter() })
+  const ynab = new Ynab({ client, allowWrites: false })
   const ledger = new D1Ledger(env.DB)
   const lastMonth = previousMonth(currentMonth())
-  const records = await ledger.list({ cutoff: lastDayOfMonth(lastMonth), kind: 'close' })
+  const monthBeforeLast = previousMonth(lastMonth)
+
+  // Bounded to the most recent rows (list() is newest-first) — last month's closes are always
+  // among the newest records in an append-only ledger, so this avoids scanning the full history.
+  const closeRecords = await ledger.list({ kind: 'close', limit: 200 })
+  const closedCardsLastMonth = new Set(
+    closeRecords
+      .filter((r) => r.cutoff.startsWith(lastMonth))
+      .flatMap((r) => r.perCard.map((p) => p.account)),
+  )
 
   const cards: { name: string; gap: number; gapChange: number; causes: { cause: string; amount: number }[] }[] = []
   for (const pair of pairs) {
     try {
-      const { gapMilli } = await fetchGapMilli(client, planId, pair)
-      // Missing ledger record for this card+month → formatMonthlyReport renders "no close recorded".
-      const record = records.find((r) => r.perCard.some((p) => p.account === pair.name))
-      const causes = (record?.causes ?? []).map((c) => ({ cause: c.cause, amount: c.change }))
-      const gapChange = causes.reduce((sum, c) => sum + c.amount, 0)
-      cards.push({ name: pair.name, gap: milliToDollars(gapMilli), gapChange, causes })
+      const history = await ynab.getCreditCardFloatHistory(planId, {
+        paymentCategoryId: pair.paymentCategoryId,
+        cardAccountId: pair.cardAccountId,
+        sinceMonth: monthBeforeLast,
+        untilMonth: lastMonth,
+      })
+      const point = history.points.find((p) => p.month === lastMonth)
+      const wasClosed = closedCardsLastMonth.has(pair.name)
+      const causes = wasClosed ? (point?.evidence?.components ?? []).map((c) => ({ cause: c.cause, amount: c.amount })) : []
+      cards.push({ name: pair.name, gap: point?.gap ?? 0, gapChange: point?.gapChange ?? 0, causes })
     } catch (e) {
       console.error(`monthly report fetch failed for card "${pair.name}":`, e)
     }

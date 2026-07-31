@@ -44,12 +44,6 @@ describe('formatWeeklyDigest', () => {
     expect(text).toContain('Citi')
     expect(text).toContain('$50.00')
   })
-
-  it('appends an optional buffer note to the healthy one-liner', () => {
-    const { text } = formatWeeklyDigest([{ name: 'Citi', gap: 0 }], 'Buffer: $500.')
-    expect(text).toContain('Buffer: $500.')
-    expect(text.split('\n')).toHaveLength(1)
-  })
 })
 
 describe('formatMonthlyReport', () => {
