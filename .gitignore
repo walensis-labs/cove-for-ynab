@@ -1,8 +1,6 @@
 node_modules/
 dist/
-*.mcpb
 .env
-dist-mcpb/
 
 # Personal deploy config (real ids/emails) — template lives in wrangler.jsonc
 apps/worker/wrangler.local.jsonc

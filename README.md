@@ -4,24 +4,28 @@ A fast, safe MCP server for YNAB — full budget access for Claude and other AI 
 
 35 tools covering budgets, transactions, categories, payees, accounts, scheduled transactions, and server-computed analytics (spending summaries, budget health, recurring charges, income vs. expense, net worth, month-close coverage, category and credit-card float history). Writes are off unless you explicitly turn them on, risky writes require confirmation, and writes that edit or delete existing data can be undone.
 
-## Quickstart
+## Install
 
-### Claude Code
+There are two ways to run Cove for YNAB: **local** (the npm package, one client at a time) or
+**remote** (one URL + token, works from Desktop, Code, and mobile identically).
+
+### Install (local)
+
+Runs on your machine via `npx`. Works with Claude Code and Claude Desktop. Not reachable from
+mobile — mobile clients need the remote path below.
+
+**Claude Code:**
 
 ```
 claude mcp add ynab -e YNAB_ACCESS_TOKEN=xxx -- npx -y @walensis/mcp-for-ynab
 ```
 
-Replace `xxx` with your personal access token (see [Getting a token](#getting-a-token) below).
-
-### Claude Desktop
-
-Add this to your Claude Desktop config (`claude_desktop_config.json`):
+**Claude Desktop** — add this to your config (`claude_desktop_config.json`):
 
 ```json
 {
   "mcpServers": {
-    "ynab": {
+    "cove": {
       "command": "npx",
       "args": ["-y", "@walensis/mcp-for-ynab"],
       "env": {
@@ -32,17 +36,30 @@ Add this to your Claude Desktop config (`claude_desktop_config.json`):
 }
 ```
 
-Alternatively, install the `.mcpb` bundle from a [release](https://github.com/walensis-labs/mcp-for-ynab/releases) for a one-click, no-JSON install — Claude Desktop will prompt you for your token and whether to enable writes.
+Replace `xxx` with your personal access token (see [Getting a token](#getting-a-token) below). By
+default the server is read-only; add `"YNAB_ALLOW_WRITES": "1"` to `env` (or export it in Claude
+Code's `-e`) once you want the write tools — see [Read-only by default](#read-only-by-default-writes-are-opt-in).
 
-### Other MCP clients
-
-Any client that speaks MCP over stdio can run the server the same way:
+Any other client that speaks MCP over stdio can run the server the same way:
 
 ```
 npx -y @walensis/mcp-for-ynab
 ```
 
 with `YNAB_ACCESS_TOKEN` set in its environment.
+
+### Install (remote)
+
+One URL and a token, and it works identically from Claude Desktop, Claude Code, and claude.ai on
+mobile — no local process to keep running. This is `apps/worker`, a Cloudflare Worker you deploy
+on your own account: [apps/worker/README.md](./apps/worker/README.md) has the full deploy runbook
+and how to point each kind of client at it.
+
+There's no hosted version of this yet, but one is planned: a free on-demand tier (the same 35 tools,
+no always-on monitoring) and a paid tier that adds the always-on layer (hourly float checks, weekly
+digest, monthly close report, email delivery). If you self-host the worker today, you get that
+always-on layer for free — you're just running the infrastructure yourself instead of us running it
+for you.
 
 ## Getting a token
 
@@ -126,12 +143,12 @@ session runs `backfill_ledger` for each card first and leads with what it finds 
 
 ## Always-on monitoring (self-host)
 
-For hourly credit-card float monitoring, a weekly digest, and a monthly close report — delivered
-by email, with no local process to keep running — `apps/worker` ships a single-tenant Cloudflare
-Worker you deploy on your own Cloudflare account. It exposes the same 35 tools over a
-token-authenticated remote MCP endpoint (a bearer-header route for header-capable clients, plus a
-token-in-path route so claude.ai's URL-only custom connectors can reach your budget directly), built
-on the same library entrypoint this package exports for embedding:
+The remote worker (see [Install (remote)](#install-remote) above) also gets you hourly
+credit-card float monitoring, a weekly digest, and a monthly close report, delivered by email.
+`apps/worker` exposes the same 35 tools over a token-authenticated remote MCP endpoint (a
+bearer-header route for header-capable clients, plus a token-in-path route so claude.ai's
+URL-only custom connectors can reach your budget directly), built on the same library entrypoint
+this package exports for embedding:
 
 ```ts
 import { tools, buildServer } from '@walensis/mcp-for-ynab'

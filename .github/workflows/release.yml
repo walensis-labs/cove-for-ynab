@@ -26,20 +26,3 @@ jobs:
       - name: Verify publish landed
         if: steps.changesets.outputs.published == 'true'
         run: node scripts/verify-published.mjs
-      - name: Build and attach .mcpb to the GitHub release
-        if: steps.changesets.outputs.published == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PUBLISHED: ${{ steps.changesets.outputs.publishedPackages }}
-        run: |
-          TAG=$(echo "$PUBLISHED" | node -e "
-            const pkgs = JSON.parse(require('fs').readFileSync(0, 'utf8'))
-            const mcp = pkgs.find((p) => p.name === '@walensis/mcp-for-ynab')
-            if (mcp) console.log(\`\${mcp.name}@\${mcp.version}\`)
-          ")
-          if [ -z "$TAG" ]; then
-            echo "mcp package not in this publish — skipping .mcpb attach"
-            exit 0
-          fi
-          ./scripts/build-mcpb.sh
-          gh release upload "$TAG" mcp-for-ynab.mcpb --clobber
