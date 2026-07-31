@@ -1,8 +1,29 @@
 import { execSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
+import { setTimeout as sleep } from 'node:timers/promises'
+
+// npm's registry can lag a successful publish by a few seconds — retry before
+// declaring failure (a false NOT PUBLISHED fails the run AFTER a real publish
+// and skips the .mcpb release attach; see the 0.2.0 release incident).
+const ATTEMPTS = 8
+const DELAY_MS = 10_000
+
+function view(name, version) {
+  try {
+    return execSync(`npm view ${name}@${version} version`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
+  } catch {
+    return null
+  }
+}
+
 for (const dir of ['packages/core', 'apps/mcp']) {
   const pkg = JSON.parse(readFileSync(`${dir}/package.json`, 'utf8'))
-  const remote = execSync(`npm view ${pkg.name}@${pkg.version} version`, { encoding: 'utf8' }).trim()
-  if (remote !== pkg.version) { console.error(`NOT PUBLISHED: ${pkg.name}@${pkg.version}`); process.exit(1) }
+  let ok = false
+  for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+    if (view(pkg.name, pkg.version) === pkg.version) { ok = true; break }
+    console.log(`attempt ${attempt}/${ATTEMPTS}: ${pkg.name}@${pkg.version} not visible yet — waiting ${DELAY_MS / 1000}s`)
+    await sleep(DELAY_MS)
+  }
+  if (!ok) { console.error(`NOT PUBLISHED after ${ATTEMPTS} attempts: ${pkg.name}@${pkg.version}`); process.exit(1) }
   console.log(`ok: ${pkg.name}@${pkg.version}`)
 }
