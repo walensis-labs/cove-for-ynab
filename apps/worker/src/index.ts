@@ -5,6 +5,7 @@ import { Ynab, YnabClient, RateLimiter, attributeChanges, milliToDollars, type R
 import { buildServer } from '@walensis/mcp-for-ynab'
 import { D1Ledger } from './d1-ledger.js'
 import { parseCardPairs, alertThresholdMilli, type WorkerEnv, type CardPair } from './env.js'
+import { selectSender } from './email-sender.js'
 import { decideAlert, assignedDeltaMilli, type MonitorState } from './monitor.js'
 import { formatAlert, formatWeeklyDigest, formatMonthlyReport, buildMonthlySection, type MonthlySection } from './emails.js'
 
@@ -159,7 +160,7 @@ async function fetchGapMilli(
 }
 
 async function sendDigest(env: WorkerEnv, email: { subject: string; text: string }): Promise<void> {
-  await env.EMAIL.send({
+  await selectSender(env).send({
     to: env.DIGEST_TO ?? '',
     from: { email: env.DIGEST_FROM ?? '', name: env.DIGEST_FROM_NAME },
     subject: email.subject,

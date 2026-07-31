@@ -8,8 +8,8 @@ A single-tenant Cloudflare Worker that gives you two things stdio can't:
   connectors) — so claude.ai and any other Streamable-HTTP MCP client can connect to your budget
   without a local process. See "Connecting a client" below.
 - **Always-on float monitoring** — an hourly check of each credit card's payment-category coverage,
-  a quiet Sunday digest, and a monthly close report, all delivered by email via Cloudflare Email
-  Service, backed by a D1 ledger.
+  a quiet Sunday digest, and a monthly close report, all delivered by email through a pluggable
+  sender (Resend or Cloudflare Email Sending — see "Email setup" below), backed by a D1 ledger.
 
 This package is private (never published to npm) and lives in this OSS repo as the self-host
 recipe: run it yourself, on your own Cloudflare account, with your own YNAB token. There is no
@@ -18,8 +18,23 @@ hosted/managed version of this worker — you deploy and own the whole thing.
 ## Prerequisites
 
 - A Cloudflare account, with `wrangler` installed and logged in (`wrangler login`).
-- A domain added to Cloudflare, for [Email Sending](https://developers.cloudflare.com/email-routing/email-sending-addresses/) — the worker sends its digests/alerts through that domain.
+- An email sender — see "Email setup" below. Pick Resend (works on the free Cloudflare Workers
+  plan) or Cloudflare Email Sending (requires Workers Paid).
 - A YNAB personal access token (see the [root README](../../README.md#getting-a-token) for how to get one).
+
+## Your deploy config vs. the committed template
+
+`wrangler.jsonc` in this repo is a **template** — `database_id`, `CARD_PAIRS`, and the digest
+addresses are `REPLACE_ME` placeholders on purpose. Keep your real values out of version control:
+
+```bash
+cp wrangler.jsonc wrangler.local.jsonc   # gitignored
+# edit wrangler.local.jsonc with your D1 id, card pairs, and email addresses
+npx wrangler deploy --config wrangler.local.jsonc
+```
+
+Every `wrangler` command below takes `--config wrangler.local.jsonc` the same way. (Secrets never
+go in either file — they're set with `wrangler secret put`.)
 
 ## One-time setup
 
@@ -29,7 +44,7 @@ Run from `apps/worker/`:
 # one-time
 wrangler d1 create mcp-for-ynab            # paste database_id into wrangler.jsonc
 wrangler d1 execute mcp-for-ynab --file=./schema.sql --remote
-wrangler email sending enable <your-domain>   # domain must be on Cloudflare
+# set up an email sender — see "Email setup" below — then:
 wrangler secret put YNAB_ACCESS_TOKEN
 wrangler secret put MCP_AUTH_TOKEN            # `openssl rand -hex 32` — hex only, no `/`; see note below
 # config: edit wrangler.jsonc vars — CARD_PAIRS, DIGEST_TO, DIGEST_FROM, PLAN_ID, ALERT_THRESHOLD_DOLLARS
@@ -39,10 +54,37 @@ curl https://<worker-url>/health
 # connect a client — see "Connecting a client" below
 ```
 
+### Email setup
+
+The worker's email sender is pluggable (`src/email-sender.ts`'s `selectSender()`) — pick one:
+
+**(A) Resend — free tier, works on the Workers Free plan.** This is the default self-host path;
+`wrangler.jsonc` ships with the `send_email` binding commented out for exactly this reason.
+
+```bash
+# sign up at resend.com, verify a sending domain (or use their onboarding sender for testing)
+wrangler secret put RESEND_API_KEY
+# set DIGEST_FROM (in wrangler.jsonc vars) to an address on that verified domain
+```
+
+Resend has its own DNS verification records (separate from Cloudflare's) — check their dashboard
+for propagation status if a test email doesn't arrive right away.
+
+**(B) Cloudflare Email Sending — requires the Workers Paid plan.** Uncomment the `send_email`
+block in `wrangler.jsonc`, then:
+
+```bash
+wrangler email sending enable <your-domain>   # domain must be on Cloudflare
+```
+
 `wrangler email sending enable` provisions SPF/DKIM DNS records on your domain; they typically take
 **~5–15 minutes to propagate**. If your first alert/digest email doesn't arrive right away, that's
 usually just DNS catching up, not a broken deploy — check again after a few minutes before digging
-into `wrangler tail`.
+into `wrangler tail`. **Email Sending is a Workers Paid feature** — if you're on the Workers Free
+plan, use Resend (option A) instead.
+
+If both `RESEND_API_KEY` and the `EMAIL` binding are configured, Resend wins (`selectSender()`
+checks it first). Leaving both unconfigured makes `sendDigest` throw at first send.
 
 ## Connecting a client
 
@@ -100,8 +142,9 @@ Notes on the `vars` block in `wrangler.jsonc`:
   unset.
 - **`PLAN_ID`** — the YNAB budget id, or `"last-used"`.
 - **`DIGEST_TO`** / **`DIGEST_FROM`** / **`DIGEST_FROM_NAME`** — who gets the emails and who they
-  appear to come from. `DIGEST_FROM`'s domain must be the one you ran `wrangler email sending
-  enable` on.
+  appear to come from. `DIGEST_FROM`'s domain must be verified with whichever sender you're
+  using — the Resend domain you verified (option A), or the domain you ran `wrangler email sending
+  enable` on (option B). See "Email setup" above.
 - **`ALERT_THRESHOLD_DOLLARS`** — dollar move that triggers an hourly alert (default `250`).
 - **`WORKER_ALLOW_WRITES`** — see the caveat below. Leave it `"0"` unless you specifically need it.
 

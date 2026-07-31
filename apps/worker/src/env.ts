@@ -12,7 +12,11 @@ export interface WorkerEnv {
   DIGEST_FROM_NAME?: string
   ALERT_THRESHOLD_DOLLARS?: string
   DB: D1Database
-  EMAIL: { send(msg: { to: string; from: { email: string; name?: string }; subject: string; text: string; html?: string }): Promise<unknown> }
+  /** Cloudflare Email Sending binding — requires Workers Paid. Optional: free-plan deploys instead
+   *  set RESEND_API_KEY and skip binding this. See email-sender.ts's selectSender(). */
+  EMAIL?: { send(msg: { to: string; from: { email: string; name?: string }; subject: string; text: string; html?: string }): Promise<unknown> }
+  /** Resend (https://resend.com) API key — the free-plan alternative to the EMAIL binding. */
+  RESEND_API_KEY?: string
 }
 
 export interface CardPair { name: string; paymentCategoryId: string; cardAccountId: string }
