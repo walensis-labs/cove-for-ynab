@@ -33,8 +33,8 @@
     "PLAN_ID": "last-used",
     "CARD_PAIRS": "[]",
     "DIGEST_TO": "REPLACE_ME@example.com",
-    "DIGEST_FROM": "float-for-ynab@REPLACE_ME.example",
-    "DIGEST_FROM_NAME": "Float for YNAB",
+    "DIGEST_FROM": "cove-for-ynab@REPLACE_ME.example",
+    "DIGEST_FROM_NAME": "Cove for YNAB",
     "ALERT_THRESHOLD_DOLLARS": "250",
     "WORKER_ALLOW_WRITES": "0"
   }

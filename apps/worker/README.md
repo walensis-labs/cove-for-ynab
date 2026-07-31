@@ -1,8 +1,10 @@
-# Float for YNAB — the always-on worker (self-host)
+# Cove for YNAB — the always-on worker (self-host)
+
+> *YNAB tells you when your budget is balanced. Cove tells you when it's actually covered.*
 
 > **Naming note for forks:** YNAB's branding guidelines require the "X for YNAB" form — a product
-> name (or DNS label, or sender address) must never *lead* with "YNAB". `float-for-ynab@yourdomain`
-> is fine; `ynabfloat@yourdomain` is not. This matters if you ever pursue a Works-with-YNAB listing.
+> name (or DNS label, or sender address) must never *lead* with "YNAB". `cove-for-ynab@yourdomain`
+> is fine; `ynabcove@yourdomain` is not. This matters if you ever pursue a Works-with-YNAB listing.
 
 
 A single-tenant Cloudflare Worker that gives you two things stdio can't:
