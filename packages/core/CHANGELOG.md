@@ -1,5 +1,11 @@
 # @walensis/mcp-for-ynab-core
 
+## 0.2.1
+
+### Patch Changes
+
+- 0c0b8ab: Bind the global fetch in YnabClient. Stored as a property and invoked as a method, an unbound global `fetch` throws "Illegal invocation" under workerd — the client worked on Node but failed in any Cloudflare Worker deploy.
+
 ## 0.2.0
 
 ### Minor Changes

@@ -1,5 +1,13 @@
 # @walensis/mcp-for-ynab
 
+## 0.2.1
+
+### Patch Changes
+
+- 16bdfc4: Retire the `.mcpb` Claude Desktop extension — one fewer artifact to build, version, and publish. There are now exactly two install paths: local (`npx -y @walensis/mcp-for-ynab`, via `claude mcp add` or the Claude Desktop JSON config) or remote (one URL + token, self-hosted today via `apps/worker`, hosted later). See the README for the full install/tier breakdown.
+- Updated dependencies [0c0b8ab]
+  - @walensis/mcp-for-ynab-core@0.2.1
+
 ## 0.2.0
 
 ### Minor Changes
