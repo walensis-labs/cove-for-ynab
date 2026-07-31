@@ -1,7 +1,7 @@
 import { YnabClient, YnabApiError } from './client.js'
 import { DeltaCache } from './delta-cache.js'
 import { UndoJournal, type InverseOp } from './undo-journal.js'
-import { LedgerStore, type MonthCloseRecord } from './ledger.js'
+import { type LedgerLike, type MonthCloseRecord } from './ledger.js'
 import { milliToDollars, dollarsToMilli, formatDollars } from './money.js'
 import { applyFilters, aggregateTxns, TXN_FIELD_ALIASES, type TxnFilters } from './filters.js'
 import { spendingSummary, budgetHealth, detectRecurring, incomeVsExpense, netWorthHistory, monthWindowStart } from './analytics.js'
@@ -106,9 +106,9 @@ export class Ynab {
   readonly cache?: DeltaCache
   readonly journal?: UndoJournal
   readonly allowWrites: boolean
-  readonly ledger?: LedgerStore
+  readonly ledger?: LedgerLike
 
-  constructor(opts: { client: YnabClient; cache?: DeltaCache; journal?: UndoJournal; allowWrites: boolean; ledger?: LedgerStore }) {
+  constructor(opts: { client: YnabClient; cache?: DeltaCache; journal?: UndoJournal; allowWrites: boolean; ledger?: LedgerLike }) {
     this.client = opts.client; this.cache = opts.cache; this.journal = opts.journal; this.allowWrites = opts.allowWrites; this.ledger = opts.ledger
   }
 
@@ -764,7 +764,7 @@ export class Ynab {
     })
     // Never wipe existing backfill history when this run produced nothing to write
     // (e.g. a range containing no complete months) — replace only replaces with substance.
-    const written = records.length > 0 ? this.ledger.replaceBackfill(planId, account, records) : []
+    const written = records.length > 0 ? await this.ledger.replaceBackfill(planId, account, records) : []
 
     // Walk backward from the newest point while the gap stays nonzero — that's the unbroken "carrying float" run.
     let nonZeroSince: string | null = null
@@ -795,13 +795,13 @@ export class Ynab {
     return { account, monthsWritten: written.length, discovery: { currentGap, nonZeroSince, sinceAtLeast, summary }, changePoints }
   }
 
-  recordMonthClose(record: Omit<MonthCloseRecord, 'id' | 'recordedAt'>): MonthCloseRecord {
+  async recordMonthClose(record: Omit<MonthCloseRecord, 'id' | 'recordedAt'>): Promise<MonthCloseRecord> {
     if (!this.ledger) throw new Error('No ledger configured — this server was started without a LedgerStore.')
-    return this.ledger.append(record)
+    return await this.ledger.append(record)
   }
 
-  getMonthCloseLedger(opts?: { limit?: number; cutoff?: string; kind?: 'close' | 'backfill' }): { records: MonthCloseRecord[]; note?: string } {
+  async getMonthCloseLedger(opts?: { limit?: number; cutoff?: string; kind?: 'close' | 'backfill' }): Promise<{ records: MonthCloseRecord[]; note?: string }> {
     if (!this.ledger) return { records: [], note: 'No ledger configured' }
-    return { records: this.ledger.list(opts) }
+    return { records: await this.ledger.list(opts) }
   }
 }

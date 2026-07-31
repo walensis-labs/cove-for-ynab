@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { Ynab, RateLimiter, LedgerStore } from '@walensis/mcp-for-ynab-core'
 import { buildServer } from '../src/server.js'
 import { resolveEnv } from '../src/env.js'
+import { tools, buildServer as buildServerFromIndex } from '../src/index.js'
 
 async function connect(ynab: Ynab) {
   const server = buildServer(ynab, new RateLimiter())
@@ -144,6 +145,16 @@ describe('server', () => {
     expect(text).toContain('PROVISIONAL until blockers')
     expect(text).toContain('never auto-approve')
     expect(text).toContain('record_month_close')
+  })
+})
+
+// Task 1 (Phase 1b worker substrate): apps/mcp gains a library entrypoint (src/index.ts) so a worker or
+// self-hosted embedder can import the tool table + buildServer + playbook directly, without going through
+// the bin/CLI. This just proves the entrypoint re-exports the right things — CLI behavior is unchanged.
+describe('library entrypoint (src/index.ts)', () => {
+  it('re-exports the 35-tool table and buildServer', () => {
+    expect(tools).toHaveLength(35)
+    expect(typeof buildServerFromIndex).toBe('function')
   })
 })
 

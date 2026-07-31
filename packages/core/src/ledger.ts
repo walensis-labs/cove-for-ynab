@@ -13,7 +13,13 @@ export interface MonthCloseRecord {
   kind?: 'close' | 'backfill' // absent = 'close' (pre-Phase-1a records predate this field)
 }
 
-export class LedgerStore {
+export interface LedgerLike {
+  append(record: Omit<MonthCloseRecord, 'id' | 'recordedAt'>): MonthCloseRecord | Promise<MonthCloseRecord>
+  list(opts?: { limit?: number; cutoff?: string; kind?: 'close' | 'backfill' }): MonthCloseRecord[] | Promise<MonthCloseRecord[]>
+  replaceBackfill(planId: string, account: string, records: Omit<MonthCloseRecord, 'id' | 'recordedAt'>[]): MonthCloseRecord[] | Promise<MonthCloseRecord[]>
+}
+
+export class LedgerStore implements LedgerLike {
   #records: MonthCloseRecord[] = []
   constructor(private readonly filePath: string) {
     if (existsSync(filePath)) {

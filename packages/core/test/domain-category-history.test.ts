@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Ynab, lastCompleteMonth } from '../src/domain.js'
 import { YnabApiError } from '../src/client.js'
-import { LedgerStore } from '../src/ledger.js'
+import { LedgerStore, type LedgerLike, type MonthCloseRecord } from '../src/ledger.js'
 
 // backfillLedger caps written records at "the last complete month" relative to the REAL clock (see
 // IMPORTANT 1 in the final-fixes review) — so fixtures that need "three complete past months" compute
@@ -230,15 +230,50 @@ describe('backfillLedger', () => {
 // record, not a backfill history row. LedgerStore.list already supports { kind }; this checks the
 // Ynab wrapper actually passes it through.
 describe('getMonthCloseLedger — kind filter passthrough', () => {
-  it('passes an explicit kind through to LedgerStore.list, leaving it unfiltered when omitted', () => {
+  it('passes an explicit kind through to LedgerStore.list, leaving it unfiltered when omitted', async () => {
     const ledger = tempLedger()
     ledger.append({ planId: 'p1', cutoff: '2026-07-31', gapStatus: 'final', perCard: [{ account: 'Visa', workingAsOf: -100, clearedAsOf: -100, availableAtMonthEnd: 100, gap: 0 }], blockers: { unapproved: 0, uncategorized: 0, unclearedBeforeCutoff: 0 } })
     ledger.replaceBackfill('p1', 'Visa', [{ planId: 'p1', cutoff: '2026-06-30', gapStatus: 'final', perCard: [{ account: 'Visa', workingAsOf: -50, clearedAsOf: -50, availableAtMonthEnd: 50, gap: 0 }], blockers: { unapproved: 0, uncategorized: 0, unclearedBeforeCutoff: 0 } }])
     const y = new Ynab({ client: { request: vi.fn() } as any, allowWrites: false, ledger })
 
-    expect(y.getMonthCloseLedger({ kind: 'close' }).records).toEqual([expect.objectContaining({ cutoff: '2026-07-31', kind: 'close' })])
-    expect(y.getMonthCloseLedger({ kind: 'backfill' }).records).toEqual([expect.objectContaining({ cutoff: '2026-06-30', kind: 'backfill' })])
-    expect(y.getMonthCloseLedger().records).toHaveLength(2)
+    expect((await y.getMonthCloseLedger({ kind: 'close' })).records).toEqual([expect.objectContaining({ cutoff: '2026-07-31', kind: 'close' })])
+    expect((await y.getMonthCloseLedger({ kind: 'backfill' })).records).toEqual([expect.objectContaining({ cutoff: '2026-06-30', kind: 'backfill' })])
+    expect((await y.getMonthCloseLedger()).records).toHaveLength(2)
+  })
+})
+
+// Task 1 (Phase 1b worker substrate): Ynab must accept ANY LedgerLike implementation — sync (LedgerStore)
+// or async (e.g. a future D1-backed worker ledger) — and await every call uniformly. This stub returns
+// Promises from all three methods to prove Ynab doesn't assume synchronous ledger access.
+function asyncLedgerStub(): LedgerLike {
+  return {
+    append: async (r) => ({ ...r, id: 'x', recordedAt: 'now', kind: r.kind ?? 'close' }) as MonthCloseRecord,
+    list: async () => [],
+    replaceBackfill: async (_planId, _account, rs) => rs.map((r) => ({ ...r, id: 'x', recordedAt: 'now', kind: 'backfill' as const })) as MonthCloseRecord[],
+  }
+}
+const asyncStubRecord = (cutoff = '2026-07-31') => ({
+  planId: 'p1', cutoff, gapStatus: 'final' as const,
+  perCard: [{ account: 'Citi', workingAsOf: -100, clearedAsOf: -100, availableAtMonthEnd: 100, gap: 0 }],
+  blockers: { unapproved: 0, uncategorized: 0, unclearedBeforeCutoff: 0 },
+})
+
+describe('Ynab + async LedgerLike (worker substrate)', () => {
+  it('recordMonthClose awaits an async ledger and resolves the appended record', async () => {
+    const y = new Ynab({ client: { request: vi.fn() } as any, allowWrites: false, ledger: asyncLedgerStub() })
+    const result = await y.recordMonthClose(asyncStubRecord())
+    expect(result).toEqual({ ...asyncStubRecord(), id: 'x', recordedAt: 'now', kind: 'close' })
+  })
+  it('getMonthCloseLedger awaits an async ledger and resolves its list', async () => {
+    const y = new Ynab({ client: { request: vi.fn() } as any, allowWrites: false, ledger: asyncLedgerStub() })
+    const result = await y.getMonthCloseLedger()
+    expect(result).toEqual({ records: [] })
+  })
+  it('backfillLedger awaits an async ledger\'s replaceBackfill (reusing the coveredFloatClient fixture)', async () => {
+    const y = new Ynab({ client: coveredFloatClient(), allowWrites: false, ledger: asyncLedgerStub() })
+    const res = await y.backfillLedger('last-used', { paymentCategoryId: 'p1', cardAccountId: 'a1', sinceMonth: M3, untilMonth: M1 })
+    expect(res.account).toBe('Citi Card')
+    expect(res.monthsWritten).toBe(3)
   })
 })
 

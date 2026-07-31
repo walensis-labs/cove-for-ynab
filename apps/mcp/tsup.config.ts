@@ -8,9 +8,9 @@ const mcpb = process.env.MCPB_BUNDLE === '1'
 const pkgVersion = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version as string
 
 export default defineConfig({
-  entry: ['src/main.ts'],
+  entry: mcpb ? ['src/main.ts'] : ['src/main.ts', 'src/index.ts'],
   format: ['esm'],
-  dts: false,
+  dts: !mcpb,
   clean: true,
   banner: { js: '#!/usr/bin/env node' },
   define: { __MCP_VERSION__: JSON.stringify(pkgVersion) },
