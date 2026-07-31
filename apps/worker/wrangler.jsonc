@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "cove",
+  "name": "cove-tools",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-31",
   "compatibility_flags": ["nodejs_compat"],
@@ -8,34 +8,15 @@
   // Set "head_sampling_rate": 0 here if dashboard log access is a concern (see README).
   "observability": { "enabled": true },
 
-  // hourly float scan, Sunday-morning weekly digest, 1st-of-month close report — see src/index.ts scheduled()
-  "triggers": {
-    "crons": ["0 * * * *", "0 13 * * SUN", "0 13 1 * *"]
-  },
-
   "d1_databases": [
-    { "binding": "DB", "database_name": "cove", "database_id": "REPLACE_ME" }
+    { "binding": "DB", "database_name": "cove-tools", "database_id": "REPLACE_ME" }
   ],
-
-  // Email sending is pluggable — see src/email-sender.ts's selectSender() and the README's
-  // "Email setup" section. Two options, pick one:
-  //   (A) Resend (works on Workers Free) — leave this binding commented out and instead run
-  //       `wrangler secret put RESEND_API_KEY`. This is the default self-host path.
-  //   (B) Cloudflare Email Sending (requires Workers Paid) — uncomment the block below AND run
-  //       `wrangler email sending enable <your-domain>`.
-  // "send_email": [{ "name": "EMAIL" }],
 
   // Non-secret config — edit for your setup. Secrets (wrangler secret put ...):
   //   YNAB_ACCESS_TOKEN — from app.ynab.com → Account Settings → Developer Settings
   //   MCP_AUTH_TOKEN     — any long random string; becomes the Bearer token for /mcp
-  //   RESEND_API_KEY     — only if using Resend for email (option A above)
   "vars": {
     "PLAN_ID": "last-used",
-    "CARD_PAIRS": "[]",
-    "DIGEST_TO": "REPLACE_ME@example.com",
-    "DIGEST_FROM": "cove-for-ynab@REPLACE_ME.example",
-    "DIGEST_FROM_NAME": "Cove for YNAB",
-    "ALERT_THRESHOLD_DOLLARS": "250",
     "WORKER_ALLOW_WRITES": "0"
   }
 }

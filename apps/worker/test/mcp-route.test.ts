@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { app } from '../src/index.js'
 import type { WorkerEnv } from '../src/env.js'
 
@@ -7,7 +7,6 @@ function fakeEnv(overrides: Partial<WorkerEnv> = {}): WorkerEnv {
     YNAB_ACCESS_TOKEN: 'ynab-token',
     MCP_AUTH_TOKEN: 'correct-token',
     DB: {} as WorkerEnv['DB'],
-    EMAIL: { send: vi.fn(async () => ({})) },
     ...overrides,
   }
 }

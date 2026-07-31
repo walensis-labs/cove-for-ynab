@@ -51,15 +51,17 @@ with `YNAB_ACCESS_TOKEN` set in its environment.
 ### Install (remote)
 
 One URL and a token, and it works identically from Claude Desktop, Claude Code, and claude.ai on
-mobile — no local process to keep running. This is `apps/worker`, a Cloudflare Worker you deploy
-on your own account: [apps/worker/README.md](./apps/worker/README.md) has the full deploy runbook
-and how to point each kind of client at it.
+mobile — no local process to keep running. This is `apps/worker`, a **single-tenant** Cloudflare
+Worker you deploy on your own account, with your own YNAB token: [apps/worker/README.md](./apps/worker/README.md)
+has the full deploy runbook and how to point each kind of client at it.
 
-There's no hosted version of this yet, but one is planned: a free on-demand tier (the same 35 tools,
-no always-on monitoring) and a paid tier that adds the always-on layer (hourly float checks, weekly
-digest, monthly close report, email delivery). If you self-host the worker today, you get that
-always-on layer for free — you're just running the infrastructure yourself instead of us running it
-for you.
+**The model, in short:** everything in this repo — the engine, the stdio server, and this remote
+endpoint — is open source and free, and it's a Tool: stateless, answers when asked, does nothing on
+its own. Anything autonomous or metered — always-on float monitoring, digests, LLM-written
+narratives, the browser extension — is a Product, and lives in a separate hosted offering we run
+and charge for. Self-hosting this worker gets you the Tool half for free, forever; it does not
+include the always-on half. If you'd rather build that yourself on top of the same open engine,
+see [docs/build-your-own-monitoring.md](./docs/build-your-own-monitoring.md).
 
 ## Getting a token
 
@@ -141,18 +143,20 @@ session runs `backfill_ledger` for each card first and leads with what it finds 
 - **Claude Desktop and other MCP clients**: the server exposes the same flow as the `month-close-session` MCP prompt.
 - Full walkthrough: [docs/playbooks/month-close.md](./docs/playbooks/month-close.md).
 
-## Always-on monitoring (self-host)
+## Remote MCP endpoint (self-host)
 
-The remote worker (see [Install (remote)](#install-remote) above) also gets you hourly
-credit-card float monitoring, a weekly digest, and a monthly close report, delivered by email.
-`apps/worker` exposes the same 35 tools over a token-authenticated remote MCP endpoint (a
-bearer-header route for header-capable clients, plus a token-in-path route so claude.ai's
-URL-only custom connectors can reach your budget directly), built on the same library entrypoint
-this package exports for embedding:
+The remote worker (see [Install (remote)](#install-remote) above) exposes the same 35 tools over a
+token-authenticated remote MCP endpoint — a bearer-header route for header-capable clients, plus a
+token-in-path route so claude.ai's URL-only custom connectors can reach your budget directly —
+built on the same library entrypoint this package exports for embedding:
 
 ```ts
 import { tools, buildServer } from '@walensis/cove-mcp'
 ```
+
+It does not include always-on monitoring — that's a separate, hosted product. See
+[docs/build-your-own-monitoring.md](./docs/build-your-own-monitoring.md) if you want to build that
+yourself on top of the same open attribution engine.
 
 Full deploy runbook: [apps/worker/README.md](./apps/worker/README.md).
 

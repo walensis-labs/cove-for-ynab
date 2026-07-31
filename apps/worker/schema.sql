@@ -10,12 +10,3 @@ CREATE TABLE IF NOT EXISTS ledger_records (
 
 CREATE INDEX IF NOT EXISTS idx_ledger_records_plan_kind_account
   ON ledger_records (plan_id, kind, account);
-
-CREATE TABLE IF NOT EXISTS monitor_state (
-  card_key TEXT PRIMARY KEY,
-  last_gap_milli INTEGER,
-  last_alert_signature TEXT,
-  last_budgeted_milli INTEGER,
-  last_month TEXT,
-  updated_at TEXT
-);
