@@ -31,7 +31,7 @@ wrangler d1 create mcp-for-ynab            # paste database_id into wrangler.jso
 wrangler d1 execute mcp-for-ynab --file=./schema.sql --remote
 wrangler email sending enable <your-domain>   # domain must be on Cloudflare
 wrangler secret put YNAB_ACCESS_TOKEN
-wrangler secret put MCP_AUTH_TOKEN            # any long random string; used as the auth token
+wrangler secret put MCP_AUTH_TOKEN            # `openssl rand -hex 32` — hex only, no `/`; see note below
 # config: edit wrangler.jsonc vars — CARD_PAIRS, DIGEST_TO, DIGEST_FROM, PLAN_ID, ALERT_THRESHOLD_DOLLARS
 wrangler deploy
 # verify
@@ -57,15 +57,23 @@ is supplied — pick whichever your client supports:
   https://<worker-url>/mcp/<MCP_AUTH_TOKEN>
   ```
 
-  No header needed. **Treat this full URL as a secret** — anyone who has it can read (and, if
-  `WORKER_ALLOW_WRITES` is on, write) your budget through it. Know where it WILL be recorded,
-  not just where it might leak: (1) this project's `wrangler.jsonc` enables Workers Logs
-  observability, which records the full request URL — **including the token** — on every call;
-  anyone with dashboard access to your Cloudflare account can read it there (mitigate with
-  `"observability": { "enabled": true, "head_sampling_rate": 0 }`, or prefer the bearer route
-  when log access is a concern); (2) the URL lands in your browser's history/autofill when you
-  paste it into claude.ai. If it leaks, rotate with `wrangler secret put MCP_AUTH_TOKEN` and
-  update the connector with the new URL.
+  No header needed. **Generate `MCP_AUTH_TOKEN` with `openssl rand -hex 32`** (or any generator
+  restricted to a URL-safe charset) rather than a generic random string — a token containing `/`
+  breaks path segmentation on `/mcp/:token` and **silently 404s** (looks like a broken deploy, not
+  a bad token) instead of failing loudly.
+
+  **Treat this full URL as a secret** — anyone who has it can read (and, if `WORKER_ALLOW_WRITES`
+  is on, write) your budget through it. Know where it WILL be recorded, not just where it might
+  leak — this is a guaranteed-logging problem, not a hypothetical-leak one: (1) this project's
+  `wrangler.jsonc` enables Workers Logs observability, which records the full request URL —
+  **including the token** — on every call; anyone with dashboard access to your Cloudflare account
+  can read it there (mitigate with `"observability": { "enabled": true, "head_sampling_rate": 0
+  }`, or prefer the bearer route when log access is a concern); (2) **`wrangler tail`** streams
+  those same request logs — including the token-bearing path — to WHOEVER is running it, live, in
+  their terminal; anyone with deploy/tail access to this Worker sees every URL as requests come in,
+  same exposure as the dashboard, just a different vector and audience; (3) the URL lands in your
+  browser's history/autofill when you paste it into claude.ai. If it leaks, rotate with `wrangler
+  secret put MCP_AUTH_TOKEN` and update the connector with the new URL.
 
 - **Header-capable clients** (Claude Code, Cursor, and most other MCP clients) — use the bearer
   route and an `Authorization` header instead, e.g. for Claude Code:
@@ -83,8 +91,13 @@ Notes on the `vars` block in `wrangler.jsonc`:
 - **`CARD_PAIRS`** — a JSON array of `{ "name": "...", "paymentCategoryId": "...", "cardAccountId": "..." }`,
   one entry per credit card you want monitored. Both ids come from YNAB (category id and account
   id); an easy way to find them is `list_categories` (for the payment category) and
-  `get_plan_overview` (for the account) through the stdio server against the same budget. Defaults
-  to `[]` (nothing monitored, crons are no-ops) if left unset.
+  `get_plan_overview` (for the account) through the stdio server against the same budget. `name` is
+  a **display label only** — it's what shows up in alert/digest text, and it does NOT need to match
+  the actual YNAB account name (the monthly report's "no close recorded" nudge is keyed off the real
+  YNAB account name internally, not this label, precisely so a cosmetic mismatch here can't cause a
+  false nudge). Defaults to `[]` (nothing monitored, crons are no-ops — hourly checks zero cards,
+  and the weekly/monthly sends are skipped outright rather than emailing an empty report) if left
+  unset.
 - **`PLAN_ID`** — the YNAB budget id, or `"last-used"`.
 - **`DIGEST_TO`** / **`DIGEST_FROM`** / **`DIGEST_FROM_NAME`** — who gets the emails and who they
   appear to come from. `DIGEST_FROM`'s domain must be the one you ran `wrangler email sending
