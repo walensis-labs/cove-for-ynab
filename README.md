@@ -124,6 +124,20 @@ session runs `backfill_ledger` for each card first and leads with what it finds 
 - **Claude Desktop and other MCP clients**: the server exposes the same flow as the `month-close-session` MCP prompt.
 - Full walkthrough: [docs/playbooks/month-close.md](./docs/playbooks/month-close.md).
 
+## Always-on monitoring (self-host)
+
+For hourly credit-card float monitoring, a weekly digest, and a monthly close report — delivered
+by email, with no local process to keep running — `apps/worker` ships a single-tenant Cloudflare
+Worker you deploy on your own Cloudflare account. It exposes the same 35 tools over a
+bearer-authenticated remote MCP endpoint (so claude.ai's custom connectors can reach your budget
+directly), built on the same library entrypoint this package exports for embedding:
+
+```ts
+import { tools, buildServer } from '@walensis/mcp-for-ynab'
+```
+
+Full deploy runbook: [apps/worker/README.md](./apps/worker/README.md).
+
 ## Development
 
 This is a pnpm monorepo: `packages/core` (`@walensis/mcp-for-ynab-core`, the API client for YNAB and domain logic) and `apps/mcp` (`@walensis/mcp-for-ynab`, the MCP server that wraps it).
