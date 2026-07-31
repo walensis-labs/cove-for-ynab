@@ -1,9 +1,12 @@
+import type { D1Database } from '@cloudflare/workers-types'
 import { Hono } from 'hono'
 import { StreamableHTTPTransport } from '@hono/mcp'
-import { Ynab, YnabClient, RateLimiter } from '@walensis/mcp-for-ynab-core'
+import { Ynab, YnabClient, RateLimiter, attributeChanges, milliToDollars, type RawTxn } from '@walensis/mcp-for-ynab-core'
 import { buildServer } from '@walensis/mcp-for-ynab'
 import { D1Ledger } from './d1-ledger.js'
-import type { WorkerEnv } from './env.js'
+import { parseCardPairs, alertThresholdMilli, type WorkerEnv, type CardPair } from './env.js'
+import { decideAlert, type MonitorState } from './monitor.js'
+import { formatAlert, formatWeeklyDigest, formatMonthlyReport } from './emails.js'
 
 /** Constant-time-ish token check: compare SHA-256 digests, not raw strings. */
 async function tokenMatches(given: string, expected: string): Promise<boolean> {
@@ -53,11 +56,183 @@ app.on(['GET', 'DELETE'], '/mcp', (c) => {
   return c.json({ error: 'method not allowed: stateless server, POST only' }, 405)
 })
 
+// --- scheduled() plumbing ------------------------------------------------
+//
+// The three cron expressions below are declared once in wrangler.jsonc's `triggers.crons` and
+// matched verbatim here — see that file for the human-readable cadence (hourly float scan, Sunday
+// weekly digest, 1st-of-month close report).
+const CRON_HOURLY = '0 * * * *'
+const CRON_WEEKLY = '0 13 * * SUN'
+const CRON_MONTHLY = '0 13 1 * *'
+
+const CRON_MISFIRE = 'scheduled(): unrecognized cron expression, expected one of ' +
+  `${CRON_HOURLY} / ${CRON_WEEKLY} / ${CRON_MONTHLY}`
+
+function currentMonth(): string {
+  return new Date().toISOString().slice(0, 7) // YYYY-MM
+}
+
+function previousMonth(month: string): string {
+  const [y, m] = month.split('-').map(Number) as [number, number]
+  return new Date(Date.UTC(y, m - 2, 1)).toISOString().slice(0, 7)
+}
+
+function lastDayOfMonth(month: string): string {
+  const [y, m] = month.split('-').map(Number) as [number, number]
+  return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10)
+}
+
+async function readMonitorState(db: D1Database, cardKey: string): Promise<MonitorState> {
+  const row = await db
+    .prepare('SELECT last_gap_milli, last_alert_signature FROM monitor_state WHERE card_key = ?')
+    .bind(cardKey)
+    .first<{ last_gap_milli: number | null; last_alert_signature: string | null }>()
+  return { lastGapMilli: row?.last_gap_milli ?? null, lastAlertSignature: row?.last_alert_signature ?? null }
+}
+
+async function writeMonitorState(db: D1Database, cardKey: string, state: MonitorState): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO monitor_state (card_key, last_gap_milli, last_alert_signature, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(card_key) DO UPDATE SET
+         last_gap_milli = excluded.last_gap_milli,
+         last_alert_signature = excluded.last_alert_signature,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(cardKey, state.lastGapMilli, state.lastAlertSignature, new Date().toISOString())
+    .run()
+}
+
+/** category.balance + account.balance, raw milli — same gap identity as month_close. */
+async function fetchGapMilli(
+  client: YnabClient,
+  planId: string,
+  pair: CardPair,
+): Promise<{ gapMilli: number; availableMilli: number; owedMilli: number; budgetedMilli: number }> {
+  const [catData, acctData] = await Promise.all([
+    client.request<{ category: { balance: number; budgeted: number } }>(`/plans/${planId}/months/current/categories/${pair.paymentCategoryId}`),
+    client.request<{ account: { balance: number } }>(`/plans/${planId}/accounts/${pair.cardAccountId}`),
+  ])
+  const availableMilli = catData.category.balance
+  const owedMilli = -acctData.account.balance
+  return {
+    gapMilli: availableMilli + acctData.account.balance,
+    availableMilli,
+    owedMilli,
+    budgetedMilli: catData.category.budgeted,
+  }
+}
+
+async function sendDigest(env: WorkerEnv, email: { subject: string; text: string }): Promise<void> {
+  await env.EMAIL.send({
+    to: env.DIGEST_TO ?? '',
+    from: { email: env.DIGEST_FROM ?? '', name: env.DIGEST_FROM_NAME },
+    subject: email.subject,
+    text: email.text,
+  })
+}
+
+/** Hourly float scan: per-card gap check, alert-on-threshold/red, `monitor_state` upserted every run. */
+async function hourlySweep(env: WorkerEnv): Promise<void> {
+  const planId = env.PLAN_ID ?? 'last-used'
+  const pairs = parseCardPairs(env.CARD_PAIRS)
+  const threshold = alertThresholdMilli(env)
+  const month = currentMonth()
+  const client = new YnabClient({ token: env.YNAB_ACCESS_TOKEN, limiter: new RateLimiter() })
+
+  for (const pair of pairs) {
+    const cardKey = pair.cardAccountId
+    try {
+      const { gapMilli, availableMilli, owedMilli, budgetedMilli } = await fetchGapMilli(client, planId, pair)
+      const state = await readMonitorState(env.DB, cardKey)
+      const decision = decideAlert({ cardKey, name: pair.name, gapMilli, availableMilli, owedMilli }, state, threshold, month)
+
+      if (decision.alert) {
+        const gapChangeMilli = gapMilli - (state.lastGapMilli ?? 0)
+        const txnsData = await client.request<{ transactions: RawTxn[] }>(`/plans/${planId}/accounts/${pair.cardAccountId}/transactions`, {
+          query: { since_date: `${month}-01` },
+        })
+        const [attributed] = attributeChanges(
+          [{ month, gapChangeMilli, availableMilli, assignedMilli: budgetedMilli }],
+          txnsData.transactions,
+        )
+        const causes = (attributed?.components ?? []).map((c) => ({ cause: c.cause as string, amount: milliToDollars(c.amountMilli) }))
+        const email = formatAlert(pair.name, milliToDollars(gapChangeMilli), milliToDollars(gapMilli), causes, month)
+        await sendDigest(env, email)
+      }
+
+      // Upserted every check (alert or not); the signature only advances when an alert actually fired.
+      await writeMonitorState(env.DB, cardKey, {
+        lastGapMilli: gapMilli,
+        lastAlertSignature: decision.alert ? decision.signature : state.lastAlertSignature,
+      })
+    } catch (e) {
+      // One card's failure must never kill the sweep for the rest — logged for `wrangler tail`.
+      console.error(`hourly float scan failed for card "${pair.name}" (${cardKey}):`, e)
+    }
+  }
+}
+
+/** Sunday weekly digest: one line when every card is covered, a per-card breakdown otherwise. */
+async function weeklyDigest(env: WorkerEnv): Promise<void> {
+  const planId = env.PLAN_ID ?? 'last-used'
+  const pairs = parseCardPairs(env.CARD_PAIRS)
+  const client = new YnabClient({ token: env.YNAB_ACCESS_TOKEN, limiter: new RateLimiter() })
+
+  const cards: { name: string; gap: number }[] = []
+  for (const pair of pairs) {
+    try {
+      const { gapMilli } = await fetchGapMilli(client, planId, pair)
+      cards.push({ name: pair.name, gap: milliToDollars(gapMilli) })
+    } catch (e) {
+      console.error(`weekly digest fetch failed for card "${pair.name}":`, e)
+    }
+  }
+  await sendDigest(env, formatWeeklyDigest(cards))
+}
+
+/** 1st-of-month close report: current gap per card + last month's recorded causes, if any. */
+async function monthlyReport(env: WorkerEnv): Promise<void> {
+  const planId = env.PLAN_ID ?? 'last-used'
+  const pairs = parseCardPairs(env.CARD_PAIRS)
+  const client = new YnabClient({ token: env.YNAB_ACCESS_TOKEN, limiter: new RateLimiter() })
+  const ledger = new D1Ledger(env.DB)
+  const lastMonth = previousMonth(currentMonth())
+  const records = await ledger.list({ cutoff: lastDayOfMonth(lastMonth), kind: 'close' })
+
+  const cards: { name: string; gap: number; gapChange: number; causes: { cause: string; amount: number }[] }[] = []
+  for (const pair of pairs) {
+    try {
+      const { gapMilli } = await fetchGapMilli(client, planId, pair)
+      // Missing ledger record for this card+month → formatMonthlyReport renders "no close recorded".
+      const record = records.find((r) => r.perCard.some((p) => p.account === pair.name))
+      const causes = (record?.causes ?? []).map((c) => ({ cause: c.cause, amount: c.change }))
+      const gapChange = causes.reduce((sum, c) => sum + c.amount, 0)
+      cards.push({ name: pair.name, gap: milliToDollars(gapMilli), gapChange, causes })
+    } catch (e) {
+      console.error(`monthly report fetch failed for card "${pair.name}":`, e)
+    }
+  }
+  await sendDigest(env, formatMonthlyReport(lastMonth, cards))
+}
+
 export default {
   fetch: app.fetch,
-  async scheduled(event: ScheduledEvent, _env: WorkerEnv, _ctx: ExecutionContext): Promise<void> {
-    // Monitor sweep + digests land in Task 3 (feat/phase1b-worker plan). Logged (not thrown) so a
-    // stray cron trigger before that ships doesn't show up as a Worker error in the dashboard.
-    console.error(`scheduled(${event.cron}) not yet implemented`)
+  async scheduled(event: ScheduledEvent, env: WorkerEnv, _ctx: ExecutionContext): Promise<void> {
+    switch (event.cron) {
+      case CRON_HOURLY:
+        await hourlySweep(env)
+        break
+      case CRON_WEEKLY:
+        await weeklyDigest(env)
+        break
+      case CRON_MONTHLY:
+        await monthlyReport(env)
+        break
+      default:
+        // Should be unreachable — wrangler.jsonc only declares the three crons above — but logged
+        // rather than thrown so a misconfigured/manual trigger doesn't show up as a Worker error.
+        console.error(`${CRON_MISFIRE} — got "${event.cron}"`)
+    }
   },
 }
