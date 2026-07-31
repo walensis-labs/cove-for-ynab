@@ -4,6 +4,8 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-07-31",
   "compatibility_flags": ["nodejs_compat"],
+  // Workers Logs records full request URLs — including a token-in-path /mcp/<token> URL.
+  // Set "head_sampling_rate": 0 here if dashboard log access is a concern (see README).
   "observability": { "enabled": true },
 
   // hourly float scan, Sunday-morning weekly digest, 1st-of-month close report — see src/index.ts scheduled()

@@ -58,8 +58,14 @@ is supplied — pick whichever your client supports:
   ```
 
   No header needed. **Treat this full URL as a secret** — anyone who has it can read (and, if
-  `WORKER_ALLOW_WRITES` is on, write) your budget through it. If it ever leaks, rotate it with
-  `wrangler secret put MCP_AUTH_TOKEN` and update the connector with the new URL.
+  `WORKER_ALLOW_WRITES` is on, write) your budget through it. Know where it WILL be recorded,
+  not just where it might leak: (1) this project's `wrangler.jsonc` enables Workers Logs
+  observability, which records the full request URL — **including the token** — on every call;
+  anyone with dashboard access to your Cloudflare account can read it there (mitigate with
+  `"observability": { "enabled": true, "head_sampling_rate": 0 }`, or prefer the bearer route
+  when log access is a concern); (2) the URL lands in your browser's history/autofill when you
+  paste it into claude.ai. If it leaks, rotate with `wrangler secret put MCP_AUTH_TOKEN` and
+  update the connector with the new URL.
 
 - **Header-capable clients** (Claude Code, Cursor, and most other MCP clients) — use the bearer
   route and an `Authorization` header instead, e.g. for Claude Code:
