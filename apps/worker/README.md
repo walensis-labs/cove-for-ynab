@@ -9,7 +9,7 @@
 
 A single-tenant Cloudflare Worker that gives you two things stdio can't:
 
-- **A remote MCP endpoint** — the same 35-tool server (`@walensis/mcp-for-ynab`'s library entrypoint,
+- **A remote MCP endpoint** — the same 35-tool server (`@walensis/cove-mcp`'s library entrypoint,
   `buildServer`), reachable over Streamable HTTP with a token-authenticated route for every kind of
   client — a bearer-header route and a token-in-path route (for claude.ai's URL-only custom
   connectors) — so claude.ai and any other Streamable-HTTP MCP client can connect to your budget
@@ -220,7 +220,7 @@ Off (`"0"`) by default, and that's the recommended setting. If you turn it on, b
   persists month-close/backfill records, not a write-undo journal. On the worker, `undo_last` will
   simply report nothing to undo, even right after a write that changed something.
 - Leave writes off on the worker unless you have a specific need for a remote client (e.g. claude.ai)
-  to make changes directly. The stdio server (`npx -y @walensis/mcp-for-ynab` with
+  to make changes directly. The stdio server (`npx -y @walensis/cove-mcp` with
   `YNAB_ALLOW_WRITES=1`) remains the writing surface with undo protection — use it for anything that
   edits or deletes existing data.
 

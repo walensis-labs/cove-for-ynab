@@ -22,5 +22,5 @@ jobs:
         run: |
           curl -fsSL https://api.ynab.com/papi/open_api_spec.yaml -o /tmp/upstream.yaml
           if ! diff -q packages/core/openapi/ynab-v1.yaml /tmp/upstream.yaml >/dev/null; then
-            echo "::warning::YNAB OpenAPI spec has drifted upstream — review and re-vendor (pnpm -F @walensis/mcp-for-ynab-core gen:api)"
+            echo "::warning::YNAB OpenAPI spec has drifted upstream — review and re-vendor (pnpm -F @walensis/cove-core gen:api)"
           fi

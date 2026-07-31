@@ -8,7 +8,7 @@ importers:
 
   .:
     dependencies:
-      '@walensis/mcp-for-ynab-core':
+      '@walensis/cove-core':
         specifier: workspace:*
         version: link:packages/core
     devDependencies:
@@ -36,7 +36,7 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.0.0
         version: 1.30.0(zod@3.25.76)
-      '@walensis/mcp-for-ynab-core':
+      '@walensis/cove-core':
         specifier: workspace:*
         version: link:../../packages/core
       zod:
@@ -48,12 +48,12 @@ importers:
       '@hono/mcp':
         specifier: ^0.3.1
         version: 0.3.1(@modelcontextprotocol/sdk@1.30.0(zod@3.25.76))(hono-rate-limiter@0.5.3(hono@4.12.33))(hono@4.12.33)(zod@3.25.76)
-      '@walensis/mcp-for-ynab':
-        specifier: workspace:*
-        version: link:../mcp
-      '@walensis/mcp-for-ynab-core':
+      '@walensis/cove-core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@walensis/cove-mcp':
+        specifier: workspace:*
+        version: link:../mcp
       hono:
         specifier: ^4.12.33
         version: 4.12.33

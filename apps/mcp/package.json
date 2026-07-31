@@ -1,5 +1,5 @@
 {
-  "name": "@walensis/mcp-for-ynab",
+  "name": "@walensis/cove-mcp",
   "mcpName": "io.github.walensis-labs/mcp-for-ynab",
   "version": "0.2.0",
   "type": "module",
@@ -22,14 +22,14 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@walensis/mcp-for-ynab-core": "workspace:*",
+    "@walensis/cove-core": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "zod": "^3.23.0"
   },
   "description": "MCP server for YNAB: 35 tools for AI assistants — read-only by default, gated writes with undo, month-close sessions, credit-card float attribution.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/walensis-labs/mcp-for-ynab.git",
+    "url": "git+https://github.com/walensis-labs/cove-for-ynab.git",
     "directory": "apps/mcp"
   },
   "keywords": [

@@ -1,5 +1,5 @@
 import type { D1Database } from '@cloudflare/workers-types'
-import { dollarsToMilli } from '@walensis/mcp-for-ynab-core'
+import { dollarsToMilli } from '@walensis/cove-core'
 
 export interface WorkerEnv {
   YNAB_ACCESS_TOKEN: string

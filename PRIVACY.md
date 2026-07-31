@@ -24,4 +24,4 @@ directly to YNAB's API.
   simply clears undo history.
 
 If you have questions about this project's privacy practices, please open an
-issue on the [GitHub repository](https://github.com/walensis-labs/mcp-for-ynab).
+issue on the [GitHub repository](https://github.com/walensis-labs/cove-for-ynab).

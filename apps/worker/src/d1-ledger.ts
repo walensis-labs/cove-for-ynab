@@ -1,5 +1,5 @@
 import type { D1Database } from '@cloudflare/workers-types'
-import type { LedgerLike, MonthCloseRecord } from '@walensis/mcp-for-ynab-core'
+import type { LedgerLike, MonthCloseRecord } from '@walensis/cove-core'
 
 type NewRecord = Omit<MonthCloseRecord, 'id' | 'recordedAt'>
 

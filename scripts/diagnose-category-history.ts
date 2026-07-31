@@ -1,4 +1,4 @@
-import { Ynab, YnabClient, RateLimiter } from '@walensis/mcp-for-ynab-core'
+import { Ynab, YnabClient, RateLimiter } from '@walensis/cove-core'
 
 const token = process.env.YNAB_ACCESS_TOKEN?.trim()
 const categoryId = process.env.CATEGORY_ID ?? 'b20cf9b7-0c98-4eaf-9256-59abc598cb11'

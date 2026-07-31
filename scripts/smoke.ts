@@ -1,4 +1,4 @@
-import { Ynab, YnabClient, DeltaCache, RateLimiter } from '@walensis/mcp-for-ynab-core'
+import { Ynab, YnabClient, DeltaCache, RateLimiter } from '@walensis/cove-core'
 
 const token = process.env.YNAB_ACCESS_TOKEN?.trim()
 if (!token) { console.error('Set YNAB_ACCESS_TOKEN to run the smoke test.'); process.exit(1) }

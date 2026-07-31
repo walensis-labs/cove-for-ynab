@@ -1,5 +1,5 @@
 {
-  "name": "@walensis/mcp-for-ynab-worker",
+  "name": "@walensis/cove-worker",
   "private": true,
   "version": "0.1.1",
   "type": "module",
@@ -10,8 +10,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@walensis/mcp-for-ynab": "workspace:*",
-    "@walensis/mcp-for-ynab-core": "workspace:*",
+    "@walensis/cove-mcp": "workspace:*",
+    "@walensis/cove-core": "workspace:*",
     "@hono/mcp": "^0.3.1",
     "hono": "^4.12.33"
   },

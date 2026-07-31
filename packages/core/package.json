@@ -1,5 +1,5 @@
 {
-  "name": "@walensis/mcp-for-ynab-core",
+  "name": "@walensis/cove-core",
   "version": "0.2.0",
   "type": "module",
   "license": "MIT",
@@ -24,7 +24,7 @@
   "description": "Core library for MCP for YNAB: typed YNAB API client, month-close math, credit-card float attribution, local balance-forward ledger.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/walensis-labs/mcp-for-ynab.git",
+    "url": "git+https://github.com/walensis-labs/cove-for-ynab.git",
     "directory": "packages/core"
   },
   "keywords": [

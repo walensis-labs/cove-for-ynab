@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { Ynab } from '@walensis/mcp-for-ynab-core'
+import type { Ynab } from '@walensis/cove-core'
 
 export interface ToolDef {
   name: string

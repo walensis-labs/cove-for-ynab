@@ -1,7 +1,7 @@
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { Ynab, YnabClient, DeltaCache, UndoJournal, LedgerStore, RateLimiter } from '@walensis/mcp-for-ynab-core'
+import { Ynab, YnabClient, DeltaCache, UndoJournal, LedgerStore, RateLimiter } from '@walensis/cove-core'
 import { resolveEnv } from './env.js'
 import { buildServer } from './server.js'
 

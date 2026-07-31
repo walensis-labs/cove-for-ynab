@@ -1,4 +1,4 @@
-import { Ynab, YnabClient, RateLimiter } from '@walensis/mcp-for-ynab-core'
+import { Ynab, YnabClient, RateLimiter } from '@walensis/cove-core'
 
 const token = process.env.YNAB_ACCESS_TOKEN?.trim()
 if (!token) { console.error('Set YNAB_ACCESS_TOKEN.'); process.exit(1) }

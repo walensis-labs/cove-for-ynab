@@ -17,7 +17,7 @@ mobile — mobile clients need the remote path below.
 **Claude Code:**
 
 ```
-claude mcp add ynab -e YNAB_ACCESS_TOKEN=xxx -- npx -y @walensis/mcp-for-ynab
+claude mcp add ynab -e YNAB_ACCESS_TOKEN=xxx -- npx -y @walensis/cove-mcp
 ```
 
 **Claude Desktop** — add this to your config (`claude_desktop_config.json`):
@@ -27,7 +27,7 @@ claude mcp add ynab -e YNAB_ACCESS_TOKEN=xxx -- npx -y @walensis/mcp-for-ynab
   "mcpServers": {
     "cove": {
       "command": "npx",
-      "args": ["-y", "@walensis/mcp-for-ynab"],
+      "args": ["-y", "@walensis/cove-mcp"],
       "env": {
         "YNAB_ACCESS_TOKEN": "xxx"
       }
@@ -43,7 +43,7 @@ Code's `-e`) once you want the write tools — see [Read-only by default](#read-
 Any other client that speaks MCP over stdio can run the server the same way:
 
 ```
-npx -y @walensis/mcp-for-ynab
+npx -y @walensis/cove-mcp
 ```
 
 with `YNAB_ACCESS_TOKEN` set in its environment.
@@ -151,14 +151,16 @@ URL-only custom connectors can reach your budget directly), built on the same li
 this package exports for embedding:
 
 ```ts
-import { tools, buildServer } from '@walensis/mcp-for-ynab'
+import { tools, buildServer } from '@walensis/cove-mcp'
 ```
 
 Full deploy runbook: [apps/worker/README.md](./apps/worker/README.md).
 
 ## Development
 
-This is a pnpm monorepo: `packages/core` (`@walensis/mcp-for-ynab-core`, the API client for YNAB and domain logic) and `apps/mcp` (`@walensis/mcp-for-ynab`, the MCP server that wraps it).
+This is a pnpm monorepo: `packages/core` (`@walensis/cove-core`, the API client for YNAB and domain logic) and `apps/mcp` (`@walensis/cove-mcp`, the MCP server that wraps it).
+
+**Naming:** Cove is the product; `@walensis/cove-core` is the engine, `@walensis/cove-mcp` is the MCP surface, and the MCP registry entry keeps its descriptive `mcp-for-ynab` name for discoverability.
 
 ```
 pnpm install

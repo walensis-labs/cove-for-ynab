@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import { Ynab, RateLimiter } from '@walensis/mcp-for-ynab-core'
+import { Ynab, RateLimiter } from '@walensis/cove-core'
 import { tools } from './tools.js'
 import { MONTH_CLOSE_PLAYBOOK } from './playbook.js'
 

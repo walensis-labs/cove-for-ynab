@@ -10,9 +10,9 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
-    "smoke": "pnpm -F @walensis/mcp-for-ynab-core build && tsx scripts/smoke.ts",
-    "diagnose": "pnpm -F @walensis/mcp-for-ynab-core build && tsx scripts/diagnose-category-history.ts",
-    "validate:fixtures": "pnpm -F @walensis/mcp-for-ynab-core build && tsx scripts/validate-fixtures.ts"
+    "smoke": "pnpm -F @walensis/cove-core build && tsx scripts/smoke.ts",
+    "diagnose": "pnpm -F @walensis/cove-core build && tsx scripts/diagnose-category-history.ts",
+    "validate:fixtures": "pnpm -F @walensis/cove-core build && tsx scripts/validate-fixtures.ts"
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.1",
@@ -23,6 +23,6 @@
     "vitest": "^2.0.0"
   },
   "dependencies": {
-    "@walensis/mcp-for-ynab-core": "workspace:*"
+    "@walensis/cove-core": "workspace:*"
   }
 }

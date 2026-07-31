@@ -1,4 +1,4 @@
-import { formatDollars } from '@walensis/mcp-for-ynab-core'
+import { formatDollars } from '@walensis/cove-core'
 
 /** §9.7: every alert/monthly email ends with this exact sentence — the nudge into the fix workflow. */
 const FIX_LINE = 'Fix: run /month-close in Claude — propose_coverage will draft the covering moves for your approval.'

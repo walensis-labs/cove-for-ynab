@@ -2,11 +2,11 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
   "name": "io.github.walensis-labs/mcp-for-ynab",
   "description": "YNAB budget access for AI assistants: safe gated writes, month-close sessions, float attribution.",
-  "repository": { "url": "https://github.com/walensis-labs/mcp-for-ynab", "source": "github" },
+  "repository": { "url": "https://github.com/walensis-labs/cove-for-ynab", "source": "github" },
   "version": "0.1.0",
   "packages": [{
     "registryType": "npm",
-    "identifier": "@walensis/mcp-for-ynab",
+    "identifier": "@walensis/cove-mcp",
     "version": "0.1.0",
     "transport": { "type": "stdio" },
     "environmentVariables": [
