@@ -27,7 +27,9 @@ export class YnabClient {
 
   constructor(opts: { token: string; fetchImpl?: typeof fetch; baseUrl?: string; limiter?: RateLimiter; timeoutMs?: number }) {
     this.#token = opts.token
-    this.#fetch = opts.fetchImpl ?? fetch
+    // Bind the global fetch: stored as a property and called as this.#fetch(...), an unbound
+    // global throws "Illegal invocation" in workerd (Node is lenient — only a Worker deploy catches it).
+    this.#fetch = opts.fetchImpl ?? fetch.bind(globalThis)
     this.#base = opts.baseUrl ?? 'https://api.ynab.com/v1'
     this.#limiter = opts.limiter
     this.#timeoutMs = opts.timeoutMs ?? 45_000

@@ -25,9 +25,11 @@ export class ResendEmailSender implements EmailSender {
   readonly #apiKey: string
   readonly #fetch: typeof fetch
 
-  constructor(apiKey: string, fetchImpl: typeof fetch = fetch) {
+  constructor(apiKey: string, fetchImpl?: typeof fetch) {
     this.#apiKey = apiKey
-    this.#fetch = fetchImpl
+    // Bind the global fetch — an unbound global called as this.#fetch(...) throws
+    // "Illegal invocation" in workerd (see YnabClient for the same fix).
+    this.#fetch = fetchImpl ?? fetch.bind(globalThis)
   }
 
   async send(msg: EmailMessage): Promise<void> {

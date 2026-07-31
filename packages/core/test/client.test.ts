@@ -69,3 +69,24 @@ describe('YnabClient', () => {
     await expect(c.request('/user')).rejects.toThrow(/timed out after 45000ms.*\/user.*retry/s)
   })
 })
+
+describe('global fetch binding (workerd regression)', () => {
+  it('calls the global fetch with a correct this-binding when no fetchImpl is given', async () => {
+    const original = globalThis.fetch
+    let seenThis: unknown = 'never-called'
+    globalThis.fetch = function (this: unknown) {
+      seenThis = this
+      return Promise.resolve(new Response(JSON.stringify({ data: { ok: true } }), { status: 200 }))
+    } as unknown as typeof fetch
+    try {
+      // Constructed AFTER the stub so the bound reference captures it.
+      const c = new YnabClient({ token: 't' })
+      await c.request('/user')
+    } finally {
+      globalThis.fetch = original
+    }
+    // Unbound (this.#fetch = fetch) would surface the YnabClient instance here and
+    // throw "Illegal invocation" under workerd.
+    expect(seenThis === globalThis || seenThis === undefined).toBe(true)
+  })
+})

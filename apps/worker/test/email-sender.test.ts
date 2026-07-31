@@ -113,3 +113,21 @@ describe('selectSender', () => {
     expect(selectSender(env)).toBeInstanceOf(CloudflareEmailSender)
   })
 })
+
+describe('global fetch binding (workerd regression)', () => {
+  it('binds the global fetch when no fetchImpl is injected', async () => {
+    const original = globalThis.fetch
+    let seenThis: unknown = 'never-called'
+    globalThis.fetch = function (this: unknown) {
+      seenThis = this
+      return Promise.resolve(new Response('{}', { status: 200 }))
+    } as unknown as typeof fetch
+    try {
+      const sender = new ResendEmailSender('re_test_key')
+      await sender.send({ to: 'a@b.com', from: { email: 'c@d.com' }, subject: 's', text: 't' })
+    } finally {
+      globalThis.fetch = original
+    }
+    expect(seenThis === globalThis || seenThis === undefined).toBe(true)
+  })
+})
