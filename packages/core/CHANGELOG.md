@@ -1,5 +1,11 @@
 # @walensis/mcp-for-ynab-core
 
+## 0.2.0
+
+### Minor Changes
+
+- 7029301: LedgerLike interface: Ynab accepts any sync-or-async ledger implementation (file LedgerStore unchanged; enables D1-backed ledgers in workers).
+
 ## 0.1.0
 
 ### Minor Changes

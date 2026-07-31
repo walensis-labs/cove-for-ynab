@@ -1,5 +1,16 @@
 # @walensis/mcp-for-ynab
 
+## 0.2.0
+
+### Minor Changes
+
+- 7029301: Library entrypoint: export the 35-tool table, buildServer, and the month-close playbook for embedding (worker/self-host reuse). CLI behavior unchanged.
+
+### Patch Changes
+
+- Updated dependencies [7029301]
+  - @walensis/mcp-for-ynab-core@0.2.0
+
 ## 0.1.0
 
 ### Minor Changes
