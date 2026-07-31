@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatAlert, formatWeeklyDigest, formatMonthlyReport } from '../src/emails.js'
+import { formatAlert, formatWeeklyDigest, formatMonthlyReport, buildMonthlySection } from '../src/emails.js'
 
 const FIX_LINE = 'Fix: run /month-close in Claude — propose_coverage will draft the covering moves for your approval.'
 
@@ -46,24 +46,63 @@ describe('formatWeeklyDigest', () => {
   })
 })
 
+describe('buildMonthlySection', () => {
+  it('state 1: point present with causes — header + cause lines, no nudges', () => {
+    const section = buildMonthlySection(
+      'Citi',
+      { gap: -100, gapChange: -100, causes: [{ cause: 'uncovered_spending', amount: -100 }] },
+      true,
+    )
+    expect(section.name).toBe('Citi')
+    expect(section.lines[0]).toContain('Citi')
+    expect(section.lines[0]).toContain('$100.00')
+    expect(section.lines.join('\n')).toContain('uncovered_spending')
+    expect(section.lines.join('\n')).not.toContain('No close session recorded')
+    expect(section.lines.join('\n')).not.toContain('No gap change')
+  })
+
+  it('state 1 variant: point present with causes but NOT closed in the ledger — appends the no-close nudge', () => {
+    const section = buildMonthlySection(
+      'Citi',
+      { gap: -100, gapChange: -100, causes: [{ cause: 'uncovered_spending', amount: -100 }] },
+      false,
+    )
+    expect(section.lines.join('\n')).toContain('No close session recorded — run /month-close.')
+  })
+
+  it('state 2: point present, no causes, gapChange ~0, and closed — "No gap change" with NO close-recorded nudge (the mislabeling this split fixes)', () => {
+    const section = buildMonthlySection('Amex', { gap: 0, gapChange: 0, causes: [] }, true)
+    const text = section.lines.join('\n')
+    expect(text).toContain('No gap change this month.')
+    expect(text).not.toContain('No close session recorded')
+  })
+
+  it('state 2 variant: point present, no causes, gapChange ~0, and NOT closed — both nudges appear', () => {
+    const section = buildMonthlySection('Amex', { gap: 0, gapChange: 0, causes: [] }, false)
+    const text = section.lines.join('\n')
+    expect(text).toContain('No gap change this month.')
+    expect(text).toContain('No close session recorded — run /month-close.')
+  })
+
+  it('state 3: point undefined — a single honest "no data" line, never a fabricated $0', () => {
+    const section = buildMonthlySection('Citi', undefined, true)
+    expect(section.lines).toHaveLength(1)
+    expect(section.lines[0]).toContain('No data available for this month — check the card ids in CARD_PAIRS.')
+    expect(section.lines[0]).not.toContain('$0.00')
+  })
+})
+
 describe('formatMonthlyReport', () => {
-  it('lists a section per card with causes and ends with the Fix sentence', () => {
-    const { subject, text } = formatMonthlyReport('2026-07', [
-      { name: 'Citi', gap: -100, gapChange: -100, causes: [{ cause: 'uncovered_spending', amount: -100 }] },
-      { name: 'Amex', gap: 0, gapChange: 0, causes: [] },
-    ])
+  it('joins the given sections and ends with the Fix sentence', () => {
+    const sections = [
+      buildMonthlySection('Citi', { gap: -100, gapChange: -100, causes: [{ cause: 'uncovered_spending', amount: -100 }] }, true),
+      buildMonthlySection('Amex', { gap: 0, gapChange: 0, causes: [] }, true),
+    ]
+    const { subject, text } = formatMonthlyReport('2026-07', sections)
     expect(subject).toContain('2026-07')
     expect(text).toContain('Citi')
     expect(text).toContain('Amex')
     expect(text).toContain('uncovered_spending')
-    expect(text).toContain('$100.00')
     expect(text.trimEnd().endsWith(FIX_LINE)).toBe(true)
-  })
-
-  it('renders a "no close recorded" line for a card with no causes', () => {
-    const { text } = formatMonthlyReport('2026-07', [
-      { name: 'Amex', gap: 0, gapChange: 0, causes: [] },
-    ])
-    expect(text).toContain('no close recorded')
   })
 })

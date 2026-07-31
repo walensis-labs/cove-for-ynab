@@ -16,5 +16,6 @@ CREATE TABLE IF NOT EXISTS monitor_state (
   last_gap_milli INTEGER,
   last_alert_signature TEXT,
   last_budgeted_milli INTEGER,
+  last_month TEXT,
   updated_at TEXT
 );

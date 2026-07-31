@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { alertSignature, decideAlert, type CardCheck, type MonitorState } from '../src/monitor.js'
+import { alertSignature, decideAlert, assignedDeltaMilli, type CardCheck, type MonitorState } from '../src/monitor.js'
 
 const THRESHOLD = 250_000 // $250 in milli
 const MONTH = '2026-07'
@@ -109,5 +109,25 @@ describe('decideAlert', () => {
     const small = decideAlert(check({ gapMilli: 0 }), smallState, THRESHOLD, MONTH)
     expect(small.alert).toBe(false)
     expect(small.reason).toBeNull()
+  })
+})
+
+describe('assignedDeltaMilli', () => {
+  it('returns 0 on the first-ever observation (no prior budgeted figure or month tag)', () => {
+    expect(assignedDeltaMilli(500_000, null, null, '2026-07')).toBe(0)
+  })
+
+  it('returns the raw diff when the last check was in the same month', () => {
+    expect(assignedDeltaMilli(700_000, 500_000, '2026-07', '2026-07')).toBe(200_000)
+  })
+
+  it('discards last month\'s accumulated total at month rollover — the fresh figure IS the delta', () => {
+    // Last month ended with $2,000 budgeted total; this month's first check sees $300 budgeted so
+    // far. A raw diff would read as a $1,700 phantom drain; the correct delta is just the $300.
+    expect(assignedDeltaMilli(300_000, 2_000_000, '2026-06', '2026-07')).toBe(300_000)
+  })
+
+  it('returns 0 at rollover when nothing has been assigned yet in the new month', () => {
+    expect(assignedDeltaMilli(0, 2_000_000, '2026-06', '2026-07')).toBe(0)
   })
 })

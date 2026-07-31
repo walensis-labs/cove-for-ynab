@@ -51,3 +51,27 @@ export function decideAlert(
 
   return { alert: wentRed || moved, reason, signature }
 }
+
+/**
+ * Assignment delta since the last hourly check, MONTH-AWARE. A raw `budgetedNow − lastBudgeted`
+ * diff is only meaningful when both observations fall in the same YNAB month — `budgeted` is a
+ * cumulative-for-the-month total, so subtracting last month's ACCUMULATED figure from this month's
+ * fresh one on the first check after rollover would produce a large phantom negative
+ * "payment_category_drain" that never actually happened.
+ *
+ * - First-ever observation (`lastBudgeted` and `lastMonth` both null): nothing to diff against → 0.
+ * - Month has rolled over (`lastMonth !== currentMonth`): the new month starts its `budgeted` total
+ *   from zero, so whatever is budgeted at the first hourly check IS the delta — a legitimate cover
+ *   (or, if nothing's been assigned yet, a legitimate zero).
+ * - Same month as the last check: the plain diff.
+ */
+export function assignedDeltaMilli(
+  budgetedNow: number,
+  lastBudgeted: number | null,
+  lastMonth: string | null,
+  currentMonth: string,
+): number {
+  if (lastBudgeted === null && lastMonth === null) return 0
+  if (lastMonth !== currentMonth) return budgetedNow
+  return budgetedNow - (lastBudgeted ?? 0)
+}

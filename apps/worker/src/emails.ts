@@ -58,21 +58,56 @@ export function formatWeeklyDigest(cards: { name: string; gap: number }[]): Emai
   return { subject, text: lines.join('\n') }
 }
 
-/** Monthly close report. One section per card; a card with no ledger record renders "no close recorded". */
-export function formatMonthlyReport(
-  month: string,
-  cards: { name: string; gap: number; gapChange: number; causes: { cause: string; amount: number }[] }[],
-): EmailContent {
+export interface MonthlySection {
+  name: string
+  lines: string[]
+}
+
+/**
+ * Builds ONE card's section of the monthly report — three honest states, never a fabricated figure:
+ *
+ * 1. `point` undefined (nothing fetched for this card this month, e.g. the category/account id is
+ *    wrong or the fetch failed): a single line saying so. NEVER defaults to a $0/"covered" gap —
+ *    that would misreport "no data" as "everything's fine."
+ * 2. `point` present, `causes` empty: the gap/gapChange header, plus 'No gap change this month.'
+ *    ONLY when `gapChange` is ~0 (a real, unexplained nonzero change with no causes is left
+ *    unannotated rather than mislabeled as "nothing happened").
+ * 3. `point` present, `causes` non-empty: header + one bullet per cause.
+ *
+ * Independently of all three: 'No close session recorded — run /month-close.' is appended ONLY
+ * when `closedInLedger` is false. This is deliberately decoupled from whether `causes` is empty —
+ * a card that WAS closed but had zero gap change would otherwise be mislabeled "no close recorded"
+ * just because attribution found nothing to explain (the bug this split fixes).
+ */
+export function buildMonthlySection(
+  name: string,
+  point: { gap: number; gapChange: number; causes: { cause: string; amount: number }[] } | undefined,
+  closedInLedger: boolean,
+): MonthlySection {
+  if (!point) {
+    return { name, lines: [`${name}: No data available for this month — check the card ids in CARD_PAIRS.`] }
+  }
+
+  const lines: string[] = [`${name}: gap ${formatDollars(point.gap)} (change ${formatDollars(point.gapChange)})`]
+
+  if (point.causes.length > 0) {
+    for (const cause of point.causes) lines.push(`  - ${cause.cause}: ${formatDollars(cause.amount)}`)
+  } else if (Math.abs(point.gapChange) < COVERED_EPS) {
+    lines.push('  - No gap change this month.')
+  }
+
+  if (!closedInLedger) lines.push('  - No close session recorded — run /month-close.')
+
+  return { name, lines }
+}
+
+/** Monthly close report. Consumes pre-built per-card sections (see `buildMonthlySection`). */
+export function formatMonthlyReport(month: string, sections: MonthlySection[]): EmailContent {
   const subject = `Month-close report: ${month}`
   const lines: string[] = [`Month-close report for ${month}`, '']
 
-  for (const c of cards) {
-    lines.push(`${c.name}: gap ${formatDollars(c.gap)} (change ${formatDollars(c.gapChange)})`)
-    if (c.causes.length > 0) {
-      for (const cause of c.causes) lines.push(`  - ${cause.cause}: ${formatDollars(cause.amount)}`)
-    } else {
-      lines.push('  - no close recorded')
-    }
+  for (const section of sections) {
+    lines.push(...section.lines)
     lines.push('')
   }
   lines.push(FIX_LINE)
