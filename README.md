@@ -129,8 +129,9 @@ session runs `backfill_ledger` for each card first and leads with what it finds 
 For hourly credit-card float monitoring, a weekly digest, and a monthly close report — delivered
 by email, with no local process to keep running — `apps/worker` ships a single-tenant Cloudflare
 Worker you deploy on your own Cloudflare account. It exposes the same 35 tools over a
-bearer-authenticated remote MCP endpoint (so claude.ai's custom connectors can reach your budget
-directly), built on the same library entrypoint this package exports for embedding:
+token-authenticated remote MCP endpoint (a bearer-header route for header-capable clients, plus a
+token-in-path route so claude.ai's URL-only custom connectors can reach your budget directly), built
+on the same library entrypoint this package exports for embedding:
 
 ```ts
 import { tools, buildServer } from '@walensis/mcp-for-ynab'

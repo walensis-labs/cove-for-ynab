@@ -1,5 +1,5 @@
 import type { D1Database } from '@cloudflare/workers-types'
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { StreamableHTTPTransport } from '@hono/mcp'
 import { Ynab, YnabClient, RateLimiter, attributeChanges, milliToDollars, type RawTxn } from '@walensis/mcp-for-ynab-core'
 import { buildServer } from '@walensis/mcp-for-ynab'
@@ -22,16 +22,12 @@ async function tokenMatches(given: string, expected: string): Promise<boolean> {
   return diff === 0
 }
 
-export const app = new Hono<{ Bindings: WorkerEnv }>()
-
-app.get('/health', (c) => c.json({ ok: true }))
-
-app.post('/mcp', async (c) => {
-  const auth = c.req.header('authorization') ?? ''
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
-  if (!c.env.MCP_AUTH_TOKEN || !token || !(await tokenMatches(token, c.env.MCP_AUTH_TOKEN))) {
-    return c.json({ error: 'unauthorized: send Authorization: Bearer <MCP_AUTH_TOKEN>' }, 401)
-  }
+/**
+ * Shared per-request MCP server construction — identical for both auth routes below (bearer header
+ * and token-in-path). Stateless per-request server; the transport aborts its stream when the
+ * response completes and nothing else holds resources — no explicit close.
+ */
+async function handleMcpRequest(c: Context<{ Bindings: WorkerEnv }>): Promise<Response | undefined> {
   // NOTE: RateLimiter state is per-isolate and best-effort on Workers — instantiated fresh per
   // request here because module-level "shared across requests" state is unreliable (isolates are
   // recycled/scaled out at will; there is no cross-request durability without external storage
@@ -46,12 +42,41 @@ app.post('/mcp', async (c) => {
   const server = buildServer(ynab, limiter)
   const transport = new StreamableHTTPTransport()
   await server.connect(transport)
-  // Stateless per-request server; the transport aborts its stream when the response completes
-  // and nothing else holds resources — no explicit close.
   return transport.handleRequest(c)
+}
+
+export const app = new Hono<{ Bindings: WorkerEnv }>()
+
+app.get('/health', (c) => c.json({ ok: true }))
+
+app.post('/mcp', async (c) => {
+  const auth = c.req.header('authorization') ?? ''
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
+  if (!c.env.MCP_AUTH_TOKEN || !token || !(await tokenMatches(token, c.env.MCP_AUTH_TOKEN))) {
+    return c.json({ error: 'unauthorized: send Authorization: Bearer <MCP_AUTH_TOKEN>' }, 401)
+  }
+  return handleMcpRequest(c)
 })
 
 app.on(['GET', 'DELETE'], '/mcp', (c) => {
+  c.header('Allow', 'POST')
+  return c.json({ error: 'method not allowed: stateless server, POST only' }, 405)
+})
+
+// Token-in-path route — claude.ai's custom-connector dialog only accepts a URL (+ optional OAuth);
+// static request-header configuration is beta-gated there, so the bearer route above is unreachable
+// from claude.ai's UI. This mirrors the suite's health-mcp precedent: embed the token in the path
+// instead, e.g. https://<worker-url>/mcp/<MCP_AUTH_TOKEN>. Same constant-time comparison, same
+// shared request handler — the only difference is where the token comes from.
+app.post('/mcp/:token', async (c) => {
+  const token = c.req.param('token')
+  if (!c.env.MCP_AUTH_TOKEN || !token || !(await tokenMatches(token, c.env.MCP_AUTH_TOKEN))) {
+    return c.json({ error: 'unauthorized: the URL token does not match MCP_AUTH_TOKEN' }, 401)
+  }
+  return handleMcpRequest(c)
+})
+
+app.on(['GET', 'DELETE'], '/mcp/:token', (c) => {
   c.header('Allow', 'POST')
   return c.json({ error: 'method not allowed: stateless server, POST only' }, 405)
 })

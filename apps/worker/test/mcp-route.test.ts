@@ -36,3 +36,22 @@ describe('worker fetch surface', () => {
     expect(res.headers.get('Allow')).toBe('POST')
   })
 })
+
+// claude.ai's custom-connector dialog only accepts a URL (+ optional OAuth) — no static request
+// headers — so /mcp's bearer auth is unreachable from its UI. /mcp/:token mirrors the suite's
+// health-mcp precedent: the token travels in the path instead, e.g. https://<worker-url>/mcp/<token>.
+describe('worker fetch surface — token-in-path route (/mcp/:token)', () => {
+  it('POST /mcp/<valid token> with NO bearer header is not rejected as unauthorized', async () => {
+    const res = await app.request('/mcp/correct-token', { method: 'POST' }, fakeEnv())
+    expect(res.status).not.toBe(401)
+  })
+  it('POST /mcp/<wrong token> returns 401', async () => {
+    const res = await app.request('/mcp/wrong-token', { method: 'POST' }, fakeEnv())
+    expect(res.status).toBe(401)
+  })
+  it('GET /mcp/<token> (stateless, POST-only) returns 405', async () => {
+    const res = await app.request('/mcp/correct-token', {}, fakeEnv())
+    expect(res.status).toBe(405)
+    expect(res.headers.get('Allow')).toBe('POST')
+  })
+})

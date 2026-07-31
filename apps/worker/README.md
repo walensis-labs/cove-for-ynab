@@ -3,8 +3,10 @@
 A single-tenant Cloudflare Worker that gives you two things stdio can't:
 
 - **A remote MCP endpoint** — the same 35-tool server (`@walensis/mcp-for-ynab`'s library entrypoint,
-  `buildServer`), reachable over bearer-authenticated Streamable HTTP at `/mcp`, so claude.ai (and
-  any other Streamable-HTTP MCP client) can connect to your budget without a local process.
+  `buildServer`), reachable over Streamable HTTP with a token-authenticated route for every kind of
+  client — a bearer-header route and a token-in-path route (for claude.ai's URL-only custom
+  connectors) — so claude.ai and any other Streamable-HTTP MCP client can connect to your budget
+  without a local process. See "Connecting a client" below.
 - **Always-on float monitoring** — an hourly check of each credit card's payment-category coverage,
   a quiet Sunday digest, and a monthly close report, all delivered by email via Cloudflare Email
   Service, backed by a D1 ledger.
@@ -29,13 +31,46 @@ wrangler d1 create mcp-for-ynab            # paste database_id into wrangler.jso
 wrangler d1 execute mcp-for-ynab --file=./schema.sql --remote
 wrangler email sending enable <your-domain>   # domain must be on Cloudflare
 wrangler secret put YNAB_ACCESS_TOKEN
-wrangler secret put MCP_AUTH_TOKEN            # any long random string; used as the Bearer token
+wrangler secret put MCP_AUTH_TOKEN            # any long random string; used as the auth token
 # config: edit wrangler.jsonc vars — CARD_PAIRS, DIGEST_TO, DIGEST_FROM, PLAN_ID, ALERT_THRESHOLD_DOLLARS
 wrangler deploy
 # verify
 curl https://<worker-url>/health
-# claude.ai → Settings → Connectors → add custom connector: https://<worker-url>/mcp with Bearer MCP_AUTH_TOKEN
+# connect a client — see "Connecting a client" below
 ```
+
+`wrangler email sending enable` provisions SPF/DKIM DNS records on your domain; they typically take
+**~5–15 minutes to propagate**. If your first alert/digest email doesn't arrive right away, that's
+usually just DNS catching up, not a broken deploy — check again after a few minutes before digging
+into `wrangler tail`.
+
+## Connecting a client
+
+The worker exposes the same 35-tool MCP server at two routes, differing only in how the auth token
+is supplied — pick whichever your client supports:
+
+- **claude.ai (web/mobile)** — its custom-connector dialog only accepts a URL (optionally + OAuth);
+  configuring a static request header is currently beta-gated there, so the bearer route below isn't
+  reachable from its UI. Instead, add a custom connector with the token embedded in the URL:
+
+  ```
+  https://<worker-url>/mcp/<MCP_AUTH_TOKEN>
+  ```
+
+  No header needed. **Treat this full URL as a secret** — anyone who has it can read (and, if
+  `WORKER_ALLOW_WRITES` is on, write) your budget through it. If it ever leaks, rotate it with
+  `wrangler secret put MCP_AUTH_TOKEN` and update the connector with the new URL.
+
+- **Header-capable clients** (Claude Code, Cursor, and most other MCP clients) — use the bearer
+  route and an `Authorization` header instead, e.g. for Claude Code:
+
+  ```bash
+  claude mcp add --transport http ynab https://<worker-url>/mcp --header "Authorization: Bearer <MCP_AUTH_TOKEN>"
+  ```
+
+Both routes run the identical server and enforce the same token via the same constant-time
+comparison — `/mcp/:token` exists solely to work around claude.ai's URL-only connector UI, not as a
+weaker auth path.
 
 Notes on the `vars` block in `wrangler.jsonc`:
 
