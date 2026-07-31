@@ -1,4 +1,9 @@
-# mcp-for-ynab worker — always-on monitoring (self-host)
+# Float for YNAB — the always-on worker (self-host)
+
+> **Naming note for forks:** YNAB's branding guidelines require the "X for YNAB" form — a product
+> name (or DNS label, or sender address) must never *lead* with "YNAB". `float-for-ynab@yourdomain`
+> is fine; `ynabfloat@yourdomain` is not. This matters if you ever pursue a Works-with-YNAB listing.
+
 
 A single-tenant Cloudflare Worker that gives you two things stdio can't:
 
