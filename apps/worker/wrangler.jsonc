@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mcp-for-ynab-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-31",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  // hourly float scan, Sunday-morning weekly digest, 1st-of-month close report — see src/index.ts scheduled()
+  "triggers": {
+    "crons": ["0 * * * *", "0 13 * * SUN", "0 13 1 * *"]
+  },
+
+  "d1_databases": [
+    { "binding": "DB", "database_name": "mcp-for-ynab", "database_id": "REPLACE_ME" }
+  ],
+
+  "send_email": [{ "name": "EMAIL" }],
+
+  // Non-secret config — edit for your setup. Secrets (wrangler secret put ...):
+  //   YNAB_ACCESS_TOKEN — from app.ynab.com → Account Settings → Developer Settings
+  //   MCP_AUTH_TOKEN     — any long random string; becomes the Bearer token for /mcp
+  "vars": {
+    "PLAN_ID": "last-used",
+    "CARD_PAIRS": "[]",
+    "DIGEST_TO": "REPLACE_ME@example.com",
+    "DIGEST_FROM": "REPLACE_ME@yourdomain.com",
+    "DIGEST_FROM_NAME": "mcp-for-ynab",
+    "ALERT_THRESHOLD_DOLLARS": "250",
+    "WORKER_ALLOW_WRITES": "0"
+  }
+}

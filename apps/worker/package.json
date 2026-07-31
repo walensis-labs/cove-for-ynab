@@ -1,0 +1,22 @@
+{
+  "name": "@walensis/mcp-for-ynab-worker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@walensis/mcp-for-ynab": "workspace:*",
+    "@walensis/mcp-for-ynab-core": "workspace:*",
+    "@hono/mcp": "^0.3.1",
+    "hono": "^4.12.33"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260731.1",
+    "wrangler": "^4.117.0"
+  }
+}

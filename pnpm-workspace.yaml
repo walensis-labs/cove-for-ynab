@@ -3,3 +3,9 @@ packages:
   - "apps/*"
 allowBuilds:
   esbuild: true
+  workerd: true
+minimumReleaseAgeExclude:
+  - '@cloudflare/workers-types@5.20260731.1'
+  - hono@4.12.33
+  - miniflare@5.20260730.0-alpha
+  - wrangler@4.117.0
