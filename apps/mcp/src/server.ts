@@ -5,7 +5,7 @@ import { tools } from './tools.js'
 import { MONTH_CLOSE_PLAYBOOK } from './playbook.js'
 
 export function buildServer(ynab: Ynab, limiter: RateLimiter): McpServer {
-  const server = new McpServer({ name: 'mcp-for-ynab', version: '0.1.0' })
+  const server = new McpServer({ name: 'mcp-for-ynab', version: typeof __MCP_VERSION__ === 'string' ? __MCP_VERSION__ : '0.0.0-dev' })
   for (const def of tools) {
     server.registerTool(def.name, { description: def.description, inputSchema: def.schema }, async (args: Record<string, unknown>) => {
       try {

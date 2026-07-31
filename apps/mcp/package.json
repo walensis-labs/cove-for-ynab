@@ -1,14 +1,37 @@
 {
   "name": "@walensis/mcp-for-ynab",
+  "mcpName": "io.github.walensis-labs/mcp-for-ynab",
   "version": "0.0.0",
   "type": "module",
   "license": "MIT",
-  "bin": { "mcp-for-ynab": "dist/main.js" },
-  "files": ["dist"],
-  "scripts": { "build": "tsup", "test": "vitest run --passWithNoTests", "typecheck": "tsc --noEmit" },
+  "bin": {
+    "mcp-for-ynab": "dist/main.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
     "@walensis/mcp-for-ynab-core": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "zod": "^3.23.0"
-  }
+  },
+  "description": "MCP server for YNAB: 35 tools for AI assistants \u2014 read-only by default, gated writes with undo, month-close sessions, credit-card float attribution.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/walensis-labs/mcp-for-ynab.git",
+    "directory": "apps/mcp"
+  },
+  "keywords": [
+    "ynab",
+    "mcp",
+    "model-context-protocol",
+    "budget",
+    "claude",
+    "ai"
+  ]
 }

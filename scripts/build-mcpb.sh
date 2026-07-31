@@ -13,7 +13,8 @@ CHECK=$(mktemp -d)
 trap 'rm -rf "$STAGE" "$CHECK"' EXIT
 mkdir -p "$STAGE/dist"
 cp apps/mcp/dist-mcpb/main.js "$STAGE/dist/main.js"
-cp apps/mcp/manifest.json "$STAGE/manifest.json"
+# Sync the manifest version from package.json so the extension never drifts from npm
+node -e "const m=require('./apps/mcp/manifest.json'),p=require('./apps/mcp/package.json');m.version=p.version==='0.0.0'?m.version:p.version;require('fs').writeFileSync('$STAGE/manifest.json',JSON.stringify(m,null,2))"
 
 npx -y @anthropic-ai/mcpb pack "$STAGE" mcp-for-ynab.mcpb
 

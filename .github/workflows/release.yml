@@ -11,6 +11,8 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm, registry-url: 'https://registry.npmjs.org' }
+      # npm >= 11.5 is required for OIDC trusted publishing; Node 22's bundled npm predates it
+      - run: npm install -g npm@latest && npm --version
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - name: Create release PR or publish
@@ -24,3 +26,20 @@ jobs:
       - name: Verify publish landed
         if: steps.changesets.outputs.published == 'true'
         run: node scripts/verify-published.mjs
+      - name: Build and attach .mcpb to the GitHub release
+        if: steps.changesets.outputs.published == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISHED: ${{ steps.changesets.outputs.publishedPackages }}
+        run: |
+          TAG=$(echo "$PUBLISHED" | node -e "
+            const pkgs = JSON.parse(require('fs').readFileSync(0, 'utf8'))
+            const mcp = pkgs.find((p) => p.name === '@walensis/mcp-for-ynab')
+            if (mcp) console.log(\`\${mcp.name}@\${mcp.version}\`)
+          ")
+          if [ -z "$TAG" ]; then
+            echo "mcp package not in this publish — skipping .mcpb attach"
+            exit 0
+          fi
+          ./scripts/build-mcpb.sh
+          gh release upload "$TAG" mcp-for-ynab.mcpb --clobber

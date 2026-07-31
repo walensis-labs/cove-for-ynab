@@ -3,13 +3,33 @@
   "version": "0.0.0",
   "type": "module",
   "license": "MIT",
-  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
-  "files": ["dist"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "gen:api": "openapi-typescript openapi/ynab-v1.yaml -o src/generated/api.d.ts"
   },
-  "devDependencies": { "openapi-typescript": "^7.0.0" }
+  "devDependencies": {
+    "openapi-typescript": "^7.0.0"
+  },
+  "description": "Core library for MCP for YNAB: typed YNAB API client, month-close math, credit-card float attribution, local balance-forward ledger.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/walensis-labs/mcp-for-ynab.git",
+    "directory": "packages/core"
+  },
+  "keywords": [
+    "ynab",
+    "budget",
+    "api-client"
+  ]
 }
