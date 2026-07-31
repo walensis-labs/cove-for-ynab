@@ -81,7 +81,7 @@ YNAB_ALLOW_WRITES=1
 in the server's environment and restart it. With writes enabled:
 
 - **Confirmation gates**: destructive or bulk operations (deleting a transaction, deleting a scheduled transaction, bulk-updating more than 5 transactions) require an explicit `confirm: true` — and bulk updates also require `expected_count` to match the number of rows — so the assistant has to show you what it's about to do before it does it.
-- **Undo**: writes that change existing data — transaction edits/deletes, category edits, budget assignments/moves, scheduled transaction edits/deletes, payee renames — are journaled locally, and the `undo_last` tool reverses the most recent one (up to 50 writes of history, stored in `~/.mcp-for-ynab/undo.json`). Writes that *create* something (`create_category`, `create_payee`, `create_account`) and `import_transactions` are **not** reversible — YNAB's API has no delete for categories, payees, or accounts, and no way to undo an import. Those are still journaled (so undo history stays in order), but `undo_last` will tell you a given entry can't be undone and move on to the write before it. See [PRIVACY.md](./PRIVACY.md) for details on that file.
+- **Undo**: writes that change existing data — transaction edits/deletes, category edits, budget assignments/moves, scheduled transaction edits/deletes, payee renames — are journaled locally, and the `undo_last` tool reverses the most recent one (up to 50 writes of history, stored in `~/.cove/undo.json`). Writes that *create* something (`create_category`, `create_payee`, `create_account`) and `import_transactions` are **not** reversible — YNAB's API has no delete for categories, payees, or accounts, and no way to undo an import. Those are still journaled (so undo history stays in order), but `undo_last` will tell you a given entry can't be undone and move on to the write before it. See [PRIVACY.md](./PRIVACY.md) for details on that file.
 
 ## Rate limits
 
@@ -122,8 +122,8 @@ The underlying API allows 200 requests/hour per token, shared across every app u
 | `propose_coverage` | read | Ordered move proposals to bring every overspent category to zero for the cutoff month. |
 | `get_category_history` | read | One category's monthly series (assigned/activity/available) across a month range. |
 | `credit_card_float_history` | read | Per-month credit-card float analysis over a range: owed vs. payment-category available, gap, changed flag. |
-| `backfill_ledger` | local write | Backfill the local balance-forward ledger from history: one record per card per fully-elapsed month, with causes and the discovery summary ("carrying $X since <date>"). Local file only (`~/.mcp-for-ynab/ledger.json`) — never touches YNAB. |
-| `record_month_close` | local write | Persist a month-close balance-forward record (per-card gaps, blockers, causes, applied moves). Local file only (`~/.mcp-for-ynab/ledger.json`) — never touches YNAB. |
+| `backfill_ledger` | local write | Backfill the local balance-forward ledger from history: one record per card per fully-elapsed month, with causes and the discovery summary ("carrying $X since <date>"). Local file only (`~/.cove/ledger.json`) — never touches YNAB. |
+| `record_month_close` | local write | Persist a month-close balance-forward record (per-card gaps, blockers, causes, applied moves). Local file only (`~/.cove/ledger.json`) — never touches YNAB. |
 | `get_month_close_ledger` | read | Read past balance-forward records (newest first), optionally filtered by cutoff. |
 | `undo_last` | write | Undo the most recent write made through this server. |
 

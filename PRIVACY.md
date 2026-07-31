@@ -17,7 +17,7 @@ directly to YNAB's API.
   never written to disk, logged, or sent anywhere other than
   `api.ynab.com`.
 - **Undo journal**: to support the `undo_last` tool, a local log of the
-  inverse of each write is kept at `~/.mcp-for-ynab/undo.json` on your own
+  inverse of each write is kept at `~/.cove/undo.json` on your own
   machine. It contains transaction/category/payee data needed to reverse a
   change (capped at the 50 most recent writes) — nothing is sent anywhere.
   You can inspect, back up, or delete this file at any time; deleting it

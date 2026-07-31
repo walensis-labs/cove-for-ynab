@@ -49,8 +49,8 @@ Run from `apps/worker/`:
 
 ```bash
 # one-time
-wrangler d1 create mcp-for-ynab            # paste database_id into wrangler.jsonc
-wrangler d1 execute mcp-for-ynab --file=./schema.sql --remote
+wrangler d1 create cove            # paste database_id into wrangler.jsonc
+wrangler d1 execute cove --file=./schema.sql --remote
 # set up an email sender — see "Email setup" below — then:
 wrangler secret put YNAB_ACCESS_TOKEN
 wrangler secret put MCP_AUTH_TOKEN            # `openssl rand -hex 32` — hex only, no `/`; see note below
@@ -194,7 +194,7 @@ wrong.
 `schema.sql` uses `CREATE TABLE IF NOT EXISTS`, which means re-running
 
 ```bash
-wrangler d1 execute mcp-for-ynab --file=./schema.sql --remote
+wrangler d1 execute cove --file=./schema.sql --remote
 ```
 
 against a database that already has these tables is a **no-op** — it will NOT add new columns to
@@ -216,7 +216,7 @@ compare the repo's `schema.sql` against what you last applied and apply the diff
 Off (`"0"`) by default, and that's the recommended setting. If you turn it on, be aware:
 
 - **Remote writes on this worker have no undo journal.** The stdio server's `undo_last` is backed
-  by a local file (`~/.mcp-for-ynab/undo.json`); the worker has no equivalent yet — `D1Ledger` only
+  by a local file (`~/.cove/undo.json`); the worker has no equivalent yet — `D1Ledger` only
   persists month-close/backfill records, not a write-undo journal. On the worker, `undo_last` will
   simply report nothing to undo, even right after a write that changed something.
 - Leave writes off on the worker unless you have a specific need for a remote client (e.g. claude.ai)

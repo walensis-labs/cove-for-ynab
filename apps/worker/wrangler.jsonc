@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "mcp-for-ynab-worker",
+  "name": "cove",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-31",
   "compatibility_flags": ["nodejs_compat"],
@@ -14,7 +14,7 @@
   },
 
   "d1_databases": [
-    { "binding": "DB", "database_name": "mcp-for-ynab", "database_id": "REPLACE_ME" }
+    { "binding": "DB", "database_name": "cove", "database_id": "REPLACE_ME" }
   ],
 
   // Email sending is pluggable — see src/email-sender.ts's selectSender() and the README's

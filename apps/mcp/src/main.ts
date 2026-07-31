@@ -12,10 +12,10 @@ const limiter = new RateLimiter()
 const ynab = new Ynab({
   client: new YnabClient({ token, limiter }),
   cache: new DeltaCache(),
-  journal: new UndoJournal(join(homedir(), '.mcp-for-ynab', 'undo.json')),
-  ledger: new LedgerStore(join(homedir(), '.mcp-for-ynab', 'ledger.json')),
+  journal: new UndoJournal(join(homedir(), '.cove', 'undo.json')),
+  ledger: new LedgerStore(join(homedir(), '.cove', 'ledger.json')),
   allowWrites,
 })
 const server = buildServer(ynab, limiter)
 await server.connect(new StdioServerTransport())
-console.error(`mcp-for-ynab ready (writes ${allowWrites ? 'ENABLED' : 'disabled — set YNAB_ALLOW_WRITES=1 to enable'})`)
+console.error(`cove-for-ynab ready (writes ${allowWrites ? 'ENABLED' : 'disabled — set YNAB_ALLOW_WRITES=1 to enable'})`)
