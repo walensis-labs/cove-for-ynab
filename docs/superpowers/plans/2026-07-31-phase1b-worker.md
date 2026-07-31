@@ -179,3 +179,12 @@ plus: what each cron does, quiet-when-healthy expectations, WORKER_ALLOW_WRITES 
 2. Merge → OIDC train publishes core+mcp 0.2.0 (worker consumes workspace versions locally; self-hosters get npm).
 3. Deploy (AJ + me together): the runbook top-to-bottom on AJ's account — D1 create/migrate, email enable on the walensis domain, secrets, deploy.
 4. Live: `/health` 200; claude.ai custom connector lists 35 tools and runs `month_close` read-only; force one digest (`wrangler cron trigger` or temporary manual route) and receive the email; watch one real hourly cycle in `wrangler tail`.
+
+---
+
+## AMENDMENT (2026-07-31, during execution)
+
+Review of Task 3 corrected three plan-authored semantics — the shipped behavior is:
+1. Monthly report causes come from per-card `getCreditCardFloatHistory` over the closing month (close records are session-scoped and conflate cards); the ledger is consulted only for the "no close recorded" nudge.
+2. Hourly attribution's `assignedMilli` is the assignment DELTA since the last check (`monitor_state.last_budgeted_milli` added), never the month's cumulative `budgeted`.
+3. Signature-based alert suppression is REMOVED from `decideAlert` (state-diff logic already prevents repeats; suppression's only real effect was swallowing legitimate oscillation alerts). Signatures are stored for observability only.
