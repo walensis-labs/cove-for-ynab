@@ -28,7 +28,7 @@ describe('targets and assignment', () => {
       return { category: { id: 'c1', budgeted: 250000 } }
     }) } as any
     const y = new Ynab({ client, journal, allowWrites: true })
-    const res = await y.assignBudget('p1', '2026-07-01', 'c1', 250)
+    const res = await y.assignBudget('p1', '2026-07-01', 'c1', 250, undefined, { confirm: true })
     expect(res.assigned).toBe(250)
     expect(journal.popLastCommitted()!.inverse[0]).toMatchObject({ kind: 'assign_budget', budgetedMilli: 100000 })
   })
@@ -41,7 +41,7 @@ describe('targets and assignment', () => {
       return { category: {} }
     }) } as any
     const y = new Ynab({ client, journal, allowWrites: true })
-    await expect(y.moveMoney('p1', '2026-07-01', 'c-from', 'c-to', 100)).rejects.toThrow(/boom.*rolled back|rolled back.*boom/s)
+    await expect(y.moveMoney('p1', '2026-07-01', 'c-from', 'c-to', 100, undefined, { confirm: true })).rejects.toThrow(/boom.*rolled back|rolled back.*boom/s)
     // 3rd PATCH restores c-from to 500000
     expect(calls[2]!.path).toContain('c-from')
     expect(calls[2]!.body.category.budgeted).toBe(500000)
@@ -53,7 +53,7 @@ describe('targets and assignment', () => {
       return { category: { id: 'c1', budgeted: 250000 } }
     }) } as any
     const y = new Ynab({ client, journal, allowWrites: true })
-    const res: any = await y.assignBudget('p1', '2026-07-01', 'c1', 250, '[suite] cover Jul float: payment reversal $3,322.55')
+    const res: any = await y.assignBudget('p1', '2026-07-01', 'c1', 250, '[suite] cover Jul float: payment reversal $3,322.55', { confirm: true })
     expect(res.reason).toBe('[suite] cover Jul float: payment reversal $3,322.55')
     expect(journal.popLastCommitted()!.description).toMatch(/reason: \[suite\] cover Jul float/)
   })
@@ -64,7 +64,7 @@ describe('targets and assignment', () => {
       return { category: {} }
     }) } as any
     const y = new Ynab({ client, journal, allowWrites: true })
-    const res: any = await y.moveMoney('p1', '2026-07-01', 'c-from', 'c-to', 100, '[suite] rebalance float between cards')
+    const res: any = await y.moveMoney('p1', '2026-07-01', 'c-from', 'c-to', 100, '[suite] rebalance float between cards', { confirm: true })
     expect(res.reason).toBe('[suite] rebalance float between cards')
     expect(journal.popLastCommitted()!.description).toMatch(/reason: \[suite\] rebalance float/)
   })
@@ -230,7 +230,7 @@ describe('moveMoney double failure', () => {
       return { category: {} }
     }) } as any
     const y = new Ynab({ client, journal, allowWrites: true })
-    await expect(y.moveMoney('p1', '2026-07-01', 'c-from', 'c-to', 100)).rejects.toThrow(/half-applied.*undo_last|undo_last.*half-applied/is)
+    await expect(y.moveMoney('p1', '2026-07-01', 'c-from', 'c-to', 100, undefined, { confirm: true })).rejects.toThrow(/half-applied.*undo_last|undo_last.*half-applied/is)
     const entry = journal.popLastCommitted()
     expect(entry).toBeDefined()
     expect(entry!.inverse).toHaveLength(2)

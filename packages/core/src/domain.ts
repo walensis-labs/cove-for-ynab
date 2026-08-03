@@ -26,9 +26,8 @@ function toEvidenceComponent(c: AttributionComponent) {
 }
 
 export class WriteDisabledError extends Error {
-  constructor() {
-    super('Writes are disabled. This server runs read-only by default to protect your budget. ' +
-      'To enable writes, set the environment variable YNAB_ALLOW_WRITES=1 in your MCP server config and restart.')
+  constructor(hint?: string) {
+    super('Writes are disabled on this server.' + (hint ? ` ${hint}` : ''))
   }
 }
 
@@ -107,12 +106,14 @@ export class Ynab {
   readonly journal?: UndoJournal
   readonly allowWrites: boolean
   readonly ledger?: LedgerLike
+  readonly writeDisabledHint?: string
 
-  constructor(opts: { client: YnabClient; cache?: DeltaCache; journal?: UndoJournal; allowWrites: boolean; ledger?: LedgerLike }) {
+  constructor(opts: { client: YnabClient; cache?: DeltaCache; journal?: UndoJournal; allowWrites: boolean; ledger?: LedgerLike; writeDisabledHint?: string }) {
     this.client = opts.client; this.cache = opts.cache; this.journal = opts.journal; this.allowWrites = opts.allowWrites; this.ledger = opts.ledger
+    this.writeDisabledHint = opts.writeDisabledHint
   }
 
-  assertWrites(): void { if (!this.allowWrites) throw new WriteDisabledError() }
+  assertWrites(): void { if (!this.allowWrites) throw new WriteDisabledError(this.writeDisabledHint) }
 
   async listPlans() {
     const data = await this.client.request<any>('/plans')
@@ -336,8 +337,9 @@ export class Ynab {
     return this.client.request<any>(`/plans/${planId}/months/${month}/categories/${categoryId}`, { method: 'PATCH', body: { category: { budgeted: budgetedMilli } } })
   }
 
-  async assignBudget(planId: string, month: string, categoryId: string, amount: number, reason?: string) {
+  async assignBudget(planId: string, month: string, categoryId: string, amount: number, reason?: string, opts: { confirm?: boolean } = {}) {
     this.assertWrites()
+    if (!opts.confirm) throw new ConfirmationRequiredError('Assigning budget to a category')
     const prior = (await this.client.request<any>(`/plans/${planId}/months/${month}/categories/${categoryId}`)).category
     const suffix = reason ? ` — reason: ${reason}` : ''
     const jid = this.journal?.begin(`assign ${amount} to category in ${month}${suffix}`, [{ kind: 'assign_budget', planId, month, categoryId, budgetedMilli: prior.budgeted }])
@@ -347,8 +349,9 @@ export class Ynab {
     return { month, categoryId, assigned: amount, ...(reason ? { reason } : {}) }
   }
 
-  async moveMoney(planId: string, month: string, fromCategoryId: string, toCategoryId: string, amount: number, reason?: string) {
+  async moveMoney(planId: string, month: string, fromCategoryId: string, toCategoryId: string, amount: number, reason?: string, opts: { confirm?: boolean } = {}) {
     this.assertWrites()
+    if (!opts.confirm) throw new ConfirmationRequiredError('Moving money between categories')
     const [from, to] = await Promise.all([
       this.client.request<any>(`/plans/${planId}/months/${month}/categories/${fromCategoryId}`),
       this.client.request<any>(`/plans/${planId}/months/${month}/categories/${toCategoryId}`),

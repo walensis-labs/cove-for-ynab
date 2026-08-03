@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Ynab, RateLimiter, LedgerStore } from '@walensis/cove-core'
 import { buildServer } from '../src/server.js'
-import { resolveEnv } from '../src/env.js'
+import { resolveEnv, WRITE_DISABLED_HINT } from '../src/env.js'
 import { tools, buildServer as buildServerFromIndex } from '../src/index.js'
 
 async function connect(ynab: Ynab) {
@@ -130,7 +130,7 @@ describe('server', () => {
     expect(JSON.parse(res.content[0].text)[0].id).toBe('p1')
   })
   it('write tool refuses politely without YNAB_ALLOW_WRITES', async () => {
-    const client = await connect(new Ynab({ client: { request: vi.fn() } as any, allowWrites: false }))
+    const client = await connect(new Ynab({ client: { request: vi.fn() } as any, allowWrites: false, writeDisabledHint: WRITE_DISABLED_HINT }))
     const res: any = await client.callTool({ name: 'create_transactions', arguments: { plan_id: 'p1', transactions: [{ account_id: 'a', date: '2026-07-01', amount: -1 }] } })
     expect(res.isError).toBe(true)
     expect(res.content[0].text).toMatch(/YNAB_ALLOW_WRITES=1/)
