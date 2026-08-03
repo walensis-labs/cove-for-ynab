@@ -201,6 +201,16 @@ describe('updateCategory inverse', () => {
     expect(res.inverse).toContain('$1,000.00')
     expect(res.inverse).not.toMatch(/1000000/)
   })
+  it('renders an unset (null) prior non-goal-target field as "(none)", not the literal text "null"', async () => {
+    const client = { request: vi.fn(async (_path: string, opts: any) => {
+      if (!opts?.method) return { category: { id: 'c1', name: 'Rent', hidden: false, goal_target: null, goal_target_date: null, goal_frequency: null, goal_needs_whole_amount: null } }
+      return { category: { id: 'c1' } }
+    }) } as any
+    const y = new Ynab({ client, allowWrites: true })
+    const res: any = await y.updateCategory('p1', 'c1', { goalFrequency: 'monthly' })
+    expect(res.inverse).toContain('(none)')
+    expect(res.inverse).not.toMatch(/back to null\b/)
+  })
 })
 
 describe('renamePayee inverse', () => {

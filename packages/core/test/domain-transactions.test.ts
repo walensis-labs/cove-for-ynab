@@ -102,6 +102,28 @@ describe('writes', () => {
     const entry = journal.popLastCommitted()!
     expect(entry.inverse[0]).toMatchObject({ kind: 'patch_transactions', updates: [{ id: 't1', approved: false }] })
   })
+  it('finds a transaction ~14 months old (older than YNAB\'s server-side 1-year since_date default) via one batched read carrying an explicit far-past since_date', async () => {
+    // YNAB API changelog v1.85.0: listing endpoints default since_date to one year ago when the query
+    // param is omitted. The per-row GET updateTransactions used to make (`/plans/{id}/transactions/{id}`)
+    // had no date window at all, so the batched replacement must pass since_date explicitly or it
+    // silently drops rows older than ~1 year.
+    const oldTxn = apiTxn({ id: 'old1', date: daysAgo(420), category_name: 'Groceries' })
+    const requests: any[] = []
+    const client = { request: vi.fn(async (path: string, opts: any) => {
+      requests.push({ path, opts })
+      if (!opts?.method) return { transactions: [oldTxn] }
+      return { transactions: [] }
+    }) } as any
+    const y = new Ynab({ client, journal, allowWrites: true })
+    const res: any = await y.updateTransactions('p1', [{ id: 'old1', categoryId: 'c-new' }])
+    // Found and its prior category shows up in the inverse text — proves the batched read didn't
+    // silently drop this row for being outside a default 1-year window.
+    expect(res.inverse).toMatch(/category back to Groceries/)
+    // Exactly one bulk read (not one per row), and it must carry an explicit far-past since_date.
+    const reads = requests.filter((r) => !r.opts?.method)
+    expect(reads).toHaveLength(1)
+    expect(reads[0].opts?.query?.since_date).toBe('2000-01-01')
+  })
   it('delete requires confirm and journals the full transaction for restore', async () => {
     const client = { request: vi.fn(async (path: string, opts: any) => {
       if (opts?.method === 'DELETE') return { transaction: apiTxn() }

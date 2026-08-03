@@ -40,6 +40,9 @@ export class ConfirmationRequiredError extends Error {
 
 const DAY = 86_400_000
 function defaultSince(): string { return new Date(Date.now() - 365 * DAY).toISOString().slice(0, 10) }
+/** Earlier than any real YNAB transaction — used where we need "all history, no date window" from an
+ * endpoint that (per YNAB API changelog v1.85.0) defaults `since_date` to one year ago when omitted. */
+const FAR_PAST_SINCE_DATE = '2000-01-01'
 function currentMonthUTC(): string {
   const now = new Date()
   return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`
@@ -134,7 +137,7 @@ function categoryInverseClauses(body: Record<string, unknown>, prior: any): stri
   return keys.map((k) => {
     const label = CATEGORY_FIELD_LABEL[k] ?? k
     const priorVal = prior[k] ?? null
-    const display = k === 'goal_target' ? (priorVal == null ? 'none' : formatDollars(milliToDollars(priorVal as number))) : String(priorVal)
+    const display = k === 'goal_target' ? (priorVal == null ? 'none' : formatDollars(milliToDollars(priorVal as number))) : priorVal == null ? '(none)' : String(priorVal)
     return `${label} back to ${display}`
   }).join(', ')
 }
@@ -278,13 +281,18 @@ export class Ynab {
    * undo journal's patch_transactions op) — a naive Promise.all(ids.map(getTransaction)) would cost
    * one request per row, which on a 40-row bulk update alone would burn 20% of YNAB's 200/hr limit.
    * The plan-wide transactions list is one call regardless of how many ids we're after.
+   *
+   * Must pass an explicit since_date: per YNAB API changelog v1.85.0, listing endpoints default
+   * since_date to one year ago when the query param is omitted. The single per-row GET this replaced
+   * (plan transactions by-id) had no date window at all, so an unqualified bulk read here would
+   * silently narrow coverage — rows older than ~1 year would fail to be found below. Uses
+   * FAR_PAST_SINCE_DATE, the same "all history" convention as getNetWorthHistory's #allTxns call.
    */
   async #getTransactionsByIds(planId: string, ids: string[]): Promise<Map<string, Txn>> {
     const wanted = new Set(ids)
-    const data = await this.client.request<any>(`/plans/${planId}/transactions`)
     const found = new Map<string, Txn>()
-    for (const t of data.transactions as any[]) {
-      if (!t.deleted && wanted.has(t.id)) found.set(t.id, mapTxn(t))
+    for (const t of await this.#allTxns(planId, FAR_PAST_SINCE_DATE)) {
+      if (wanted.has(t.id)) found.set(t.id, t)
     }
     return found
   }
@@ -652,7 +660,7 @@ export class Ynab {
   }
 
   async getNetWorthHistory(planId: string) {
-    return netWorthHistory(await this.#allTxns(planId, '2000-01-01'))
+    return netWorthHistory(await this.#allTxns(planId, FAR_PAST_SINCE_DATE))
   }
 
   async #monthCloseRaw(planId: string, cutoff: string, lookbackDays: number) {
