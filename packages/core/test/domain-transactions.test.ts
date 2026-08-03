@@ -91,9 +91,11 @@ describe('writes', () => {
     await expect(y.updateTransactions('p1', updates, { confirm: true, expectedCount: 5 })).rejects.toThrow(/expected_count/)
   })
   it('bulk update journals prior state for undo', async () => {
-    const client = { request: vi.fn(async (path: string, opts: any) => {
-      if (path.endsWith('/transactions/t1') && !opts?.method) return { transaction: apiTxn({ approved: false }) }
-      return { transactions: [apiTxn({ approved: true })] }
+    // Prior values now come from ONE bulk read (`/plans/{id}/transactions`, no id suffix), not a
+    // per-row GET — see the "batched" describe block below for the request-count assertion.
+    const client = { request: vi.fn(async (_path: string, opts: any) => {
+      if (!opts?.method) return { transactions: [apiTxn({ approved: false })] }
+      return { transactions: [] }
     }) } as any
     const y = new Ynab({ client, journal, allowWrites: true })
     await y.updateTransactions('p1', [{ id: 't1', approved: true }])
@@ -137,8 +139,8 @@ describe('writes', () => {
 describe('updateTransactions undo fidelity', () => {
   it('inverse is API wire form (snake_case, milliunits) and ignores undefined keys — the way the MCP tool layer passes them', async () => {
     const priorTxn = apiTxn({ category_id: 'c-old', approved: false })
-    const client = { request: vi.fn(async (path: string, opts: any) => {
-      if (path.endsWith('/transactions/t1') && !opts?.method) return { transaction: priorTxn }
+    const client = { request: vi.fn(async (_path: string, opts: any) => {
+      if (!opts?.method) return { transactions: [priorTxn] }
       return { transactions: [] }
     }) } as any
     const y = new Ynab({ client, journal, allowWrites: true })
@@ -163,8 +165,8 @@ describe('updateTransactions undo fidelity', () => {
   })
   it('carries the prior amount in MILLIUNITS when amount was updated', async () => {
     const priorTxn = apiTxn({ amount: -50000 })
-    const client = { request: vi.fn(async (path: string, opts: any) => {
-      if (path.endsWith('/transactions/t1') && !opts?.method) return { transaction: priorTxn }
+    const client = { request: vi.fn(async (_path: string, opts: any) => {
+      if (!opts?.method) return { transactions: [priorTxn] }
       return { transactions: [] }
     }) } as any
     const y = new Ynab({ client, journal, allowWrites: true })
