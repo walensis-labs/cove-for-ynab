@@ -9,13 +9,16 @@ import { buildServer } from '../src/server.js'
 import { resolveEnv, WRITE_DISABLED_HINT } from '../src/env.js'
 import { tools, buildServer as buildServerFromIndex } from '../src/index.js'
 
-async function connect(ynab: Ynab) {
-  const server = buildServer(ynab, new RateLimiter())
+async function connect(ynab: Ynab, opts?: Parameters<typeof buildServer>[2]) {
+  const server = buildServer(ynab, new RateLimiter(), opts)
   const [a, b] = InMemoryTransport.createLinkedPair()
   const client = new Client({ name: 'test', version: '0.0.0' })
   await Promise.all([server.connect(a), client.connect(b)])
   return client
 }
+
+const WRITE_TOOL_NAMES = tools.filter((t) => t.write).map((t) => t.name).sort()
+const READ_TOOL_NAMES = tools.filter((t) => !t.write).map((t) => t.name).sort()
 
 // backfill_ledger now only writes records for fully-elapsed months (IMPORTANT 1) — tests that need "a
 // month backfill_ledger will actually write" compute one relative to the real clock instead of
@@ -151,6 +154,62 @@ describe('server', () => {
     expect(text).toContain('PROVISIONAL until blockers')
     expect(text).toContain('never auto-approve')
     expect(text).toContain('record_month_close')
+  })
+})
+
+// Task 3 (Hosted Writes): buildServer gains an optional opts.writeTools allowlist so a tier that
+// cannot perform writes (e.g. the hosted multi-tenant tier) can omit write tools from the
+// advertised tool list entirely, instead of registering-then-refusing. An absent tool produces a
+// clean "unknown tool" error a model can't route around; a present-but-refusing tool invites it
+// to try to work around the refusal (this is exactly what happened to a real hosted user).
+describe('buildServer writeTools allowlist', () => {
+  it("'none' registers zero write tools and every read tool (both halves — a filter that removed everything would still pass a one-sided check)", async () => {
+    const client = await connect(new Ynab({ client: { request: vi.fn() } as any, allowWrites: false }), { writeTools: 'none' })
+    const { tools: registered } = await client.listTools()
+    const names = registered.map((t) => t.name)
+    for (const w of WRITE_TOOL_NAMES) expect(names).not.toContain(w)
+    for (const r of READ_TOOL_NAMES) expect(names).toContain(r)
+    expect(names).toHaveLength(READ_TOOL_NAMES.length)
+  })
+
+  it("a denied write tool is genuinely absent from the listed tools, not present-and-erroring", async () => {
+    const client = await connect(new Ynab({ client: { request: vi.fn() } as any, allowWrites: false }), { writeTools: 'none' })
+    const { tools: registered } = await client.listTools()
+    // Asserted against the actual registered tool list (listTools), never by calling the tool.
+    expect(registered.map((t) => t.name)).not.toContain('delete_transaction')
+  })
+
+  it('an allowlist array registers exactly those write tools, and no others, alongside all read tools', async () => {
+    const allowed = ['move_money', 'create_transactions']
+    const client = await connect(new Ynab({ client: { request: vi.fn() } as any, allowWrites: false }), { writeTools: allowed })
+    const { tools: registered } = await client.listTools()
+    const names = registered.map((t) => t.name)
+    for (const a of allowed) expect(names).toContain(a)
+    for (const w of WRITE_TOOL_NAMES) if (!allowed.includes(w)) expect(names).not.toContain(w)
+    for (const r of READ_TOOL_NAMES) expect(names).toContain(r)
+    expect(names).toHaveLength(READ_TOOL_NAMES.length + allowed.length)
+  })
+
+  it("'all' and the omitted default both yield today's full 35-tool list (regression guard)", async () => {
+    const withAll = await connect(new Ynab({ client: { request: vi.fn() } as any, allowWrites: false }), { writeTools: 'all' })
+    const withDefault = await connect(new Ynab({ client: { request: vi.fn() } as any, allowWrites: false }))
+    const allNames = (await withAll.listTools()).tools.map((t) => t.name).sort()
+    const defaultNames = (await withDefault.listTools()).tools.map((t) => t.name).sort()
+    const expected = [...WRITE_TOOL_NAMES, ...READ_TOOL_NAMES].sort()
+    expect(allNames).toHaveLength(35)
+    expect(defaultNames).toHaveLength(35)
+    expect(allNames).toEqual(expected)
+    expect(defaultNames).toEqual(expected)
+  })
+
+  it('an unknown tool name in the array throws at construction, not silently (a typo must not grant zero tools unnoticed)', () => {
+    const ynab = new Ynab({ client: { request: vi.fn() } as any, allowWrites: false })
+    expect(() => buildServer(ynab, new RateLimiter(), { writeTools: ['assign_budgt'] })).toThrow(/assign_budgt/)
+  })
+
+  it('a read-tool name in the writeTools array is also rejected as unknown (the array names write tools, not tools in general)', () => {
+    const ynab = new Ynab({ client: { request: vi.fn() } as any, allowWrites: false })
+    expect(() => buildServer(ynab, new RateLimiter(), { writeTools: ['list_plans'] })).toThrow(/list_plans/)
   })
 })
 
