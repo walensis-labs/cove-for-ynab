@@ -133,7 +133,13 @@ describe('server', () => {
     const client = await connect(new Ynab({ client: { request: vi.fn() } as any, allowWrites: false, writeDisabledHint: WRITE_DISABLED_HINT }))
     const res: any = await client.callTool({ name: 'create_transactions', arguments: { plan_id: 'p1', transactions: [{ account_id: 'a', date: '2026-07-01', amount: -1 }] } })
     expect(res.isError).toBe(true)
-    expect(res.content[0].text).toMatch(/YNAB_ALLOW_WRITES=1/)
+    // Exact match, not a substring — a substring check (e.g. /YNAB_ALLOW_WRITES=1/) would still pass
+    // if WRITE_DISABLED_HINT's own "Writes are disabled." lead-in duplicated the constructor's fixed
+    // prefix. Pinning the full rendered string is what actually catches that regression.
+    expect(res.content[0].text).toBe(
+      'Writes are disabled on this server. This server runs read-only by default to protect your budget. ' +
+      'To enable writes, set the environment variable YNAB_ALLOW_WRITES=1 in your MCP server config and restart.',
+    )
   })
   it('exposes the month-close-session prompt', async () => {
     const client = await connect(new Ynab({ client: { request: vi.fn() } as any, allowWrites: false }))

@@ -15,6 +15,20 @@ describe('WriteDisabledError', () => {
     const err = new WriteDisabledError('Ask your administrator to enable writes for this workspace.')
     expect(err.message).toContain('Ask your administrator to enable writes for this workspace.')
   })
+
+  // Pins the concatenation contract exactly (not by substring) — a hint that repeats the constructor's
+  // own "Writes are disabled on this server." lead-in produces a doubled sentence that substring
+  // assertions above would not catch. See apps/mcp/src/env.ts's WRITE_DISABLED_HINT for the host-side
+  // rule this contract implies: hints must NOT include their own "Writes are disabled" lead-in.
+  it('exact rendered message with no hint', () => {
+    const err = new WriteDisabledError()
+    expect(err.message).toBe('Writes are disabled on this server.')
+  })
+
+  it('exact rendered message with a supplied hint', () => {
+    const err = new WriteDisabledError('Ask your administrator to enable writes for this workspace.')
+    expect(err.message).toBe('Writes are disabled on this server. Ask your administrator to enable writes for this workspace.')
+  })
 })
 
 describe('Ynab writeDisabledHint wiring', () => {
