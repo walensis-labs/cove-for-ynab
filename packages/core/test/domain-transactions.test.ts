@@ -5,8 +5,17 @@ import { join } from 'node:path'
 import { Ynab, ConfirmationRequiredError, WriteDisabledError } from '../src/domain.js'
 import { UndoJournal } from '../src/undo-journal.js'
 
+/**
+ * Dates here MUST be relative to today, never hardcoded. `listTransactions` applies a default
+ * 365-day window (`defaultSince()`), so a fixture with a literal date silently falls out of that
+ * window once real time passes it and the test starts failing with no code change. That is not
+ * hypothetical: this file hardcoded '2025-08-01' as its oldest transaction and began failing on
+ * 2026-08-01, exactly 365 days later.
+ */
+const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10)
+
 const apiTxn = (o: any = {}) => ({
-  id: 't1', date: '2026-07-10', amount: -45500, payee_name: 'Kroger', payee_id: 'pay1', category_name: 'Groceries',
+  id: 't1', date: daysAgo(20), amount: -45500, payee_name: 'Kroger', payee_id: 'pay1', category_name: 'Groceries',
   category_id: 'c1', account_name: 'Checking', account_id: 'a1', memo: null, cleared: 'cleared', approved: true,
   flag_color: null, transfer_account_id: null, import_id: null, deleted: false, subtransactions: [], ...o,
 })
@@ -30,9 +39,9 @@ describe('listTransactions', () => {
   })
   it('returns newest-first by default and oldest-first with sort: date_asc', async () => {
     const client = { request: vi.fn(async () => ({ transactions: [
-      apiTxn({ id: 'old', date: '2025-08-01' }),
-      apiTxn({ id: 'mid', date: '2026-01-15' }),
-      apiTxn({ id: 'new', date: '2026-07-10' }),
+      apiTxn({ id: 'old', date: daysAgo(300) }),
+      apiTxn({ id: 'mid', date: daysAgo(150) }),
+      apiTxn({ id: 'new', date: daysAgo(10) }),
     ] })) } as any
     const y = new Ynab({ client, allowWrites: false })
     const desc: any = await y.listTransactions('p1', {})
