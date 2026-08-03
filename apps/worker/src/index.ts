@@ -35,6 +35,7 @@ async function handleMcpRequest(c: Context<{ Bindings: WorkerEnv }>): Promise<Re
     client: new YnabClient({ token: c.env.YNAB_ACCESS_TOKEN, limiter }),
     ledger: new D1Ledger(c.env.DB),
     allowWrites: c.env.WORKER_ALLOW_WRITES === '1',
+    writeDisabledHint: 'To enable writes, set the WORKER_ALLOW_WRITES=1 environment variable for this worker and redeploy.',
   })
   const server = buildServer(ynab, limiter)
   const transport = new StreamableHTTPTransport()

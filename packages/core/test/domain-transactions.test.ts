@@ -5,8 +5,17 @@ import { join } from 'node:path'
 import { Ynab, ConfirmationRequiredError, WriteDisabledError } from '../src/domain.js'
 import { UndoJournal } from '../src/undo-journal.js'
 
+/**
+ * Dates here MUST be relative to today, never hardcoded. `listTransactions` applies a default
+ * 365-day window (`defaultSince()`), so a fixture with a literal date silently falls out of that
+ * window once real time passes it and the test starts failing with no code change. That is not
+ * hypothetical: this file hardcoded '2025-08-01' as its oldest transaction and began failing on
+ * 2026-08-01, exactly 365 days later.
+ */
+const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10)
+
 const apiTxn = (o: any = {}) => ({
-  id: 't1', date: '2026-07-10', amount: -45500, payee_name: 'Kroger', payee_id: 'pay1', category_name: 'Groceries',
+  id: 't1', date: daysAgo(20), amount: -45500, payee_name: 'Kroger', payee_id: 'pay1', category_name: 'Groceries',
   category_id: 'c1', account_name: 'Checking', account_id: 'a1', memo: null, cleared: 'cleared', approved: true,
   flag_color: null, transfer_account_id: null, import_id: null, deleted: false, subtransactions: [], ...o,
 })
@@ -30,9 +39,9 @@ describe('listTransactions', () => {
   })
   it('returns newest-first by default and oldest-first with sort: date_asc', async () => {
     const client = { request: vi.fn(async () => ({ transactions: [
-      apiTxn({ id: 'old', date: '2025-08-01' }),
-      apiTxn({ id: 'mid', date: '2026-01-15' }),
-      apiTxn({ id: 'new', date: '2026-07-10' }),
+      apiTxn({ id: 'old', date: daysAgo(300) }),
+      apiTxn({ id: 'mid', date: daysAgo(150) }),
+      apiTxn({ id: 'new', date: daysAgo(10) }),
     ] })) } as any
     const y = new Ynab({ client, allowWrites: false })
     const desc: any = await y.listTransactions('p1', {})
@@ -82,14 +91,38 @@ describe('writes', () => {
     await expect(y.updateTransactions('p1', updates, { confirm: true, expectedCount: 5 })).rejects.toThrow(/expected_count/)
   })
   it('bulk update journals prior state for undo', async () => {
-    const client = { request: vi.fn(async (path: string, opts: any) => {
-      if (path.endsWith('/transactions/t1') && !opts?.method) return { transaction: apiTxn({ approved: false }) }
-      return { transactions: [apiTxn({ approved: true })] }
+    // Prior values now come from ONE bulk read (`/plans/{id}/transactions`, no id suffix), not a
+    // per-row GET — see the "batched" describe block below for the request-count assertion.
+    const client = { request: vi.fn(async (_path: string, opts: any) => {
+      if (!opts?.method) return { transactions: [apiTxn({ approved: false })] }
+      return { transactions: [] }
     }) } as any
     const y = new Ynab({ client, journal, allowWrites: true })
     await y.updateTransactions('p1', [{ id: 't1', approved: true }])
     const entry = journal.popLastCommitted()!
     expect(entry.inverse[0]).toMatchObject({ kind: 'patch_transactions', updates: [{ id: 't1', approved: false }] })
+  })
+  it('finds a transaction ~14 months old (older than YNAB\'s server-side 1-year since_date default) via one batched read carrying an explicit far-past since_date', async () => {
+    // YNAB API changelog v1.85.0: listing endpoints default since_date to one year ago when the query
+    // param is omitted. The per-row GET updateTransactions used to make (`/plans/{id}/transactions/{id}`)
+    // had no date window at all, so the batched replacement must pass since_date explicitly or it
+    // silently drops rows older than ~1 year.
+    const oldTxn = apiTxn({ id: 'old1', date: daysAgo(420), category_name: 'Groceries' })
+    const requests: any[] = []
+    const client = { request: vi.fn(async (path: string, opts: any) => {
+      requests.push({ path, opts })
+      if (!opts?.method) return { transactions: [oldTxn] }
+      return { transactions: [] }
+    }) } as any
+    const y = new Ynab({ client, journal, allowWrites: true })
+    const res: any = await y.updateTransactions('p1', [{ id: 'old1', categoryId: 'c-new' }])
+    // Found and its prior category shows up in the inverse text — proves the batched read didn't
+    // silently drop this row for being outside a default 1-year window.
+    expect(res.inverse).toMatch(/category back to Groceries/)
+    // Exactly one bulk read (not one per row), and it must carry an explicit far-past since_date.
+    const reads = requests.filter((r) => !r.opts?.method)
+    expect(reads).toHaveLength(1)
+    expect(reads[0].opts?.query?.since_date).toBe('2000-01-01')
   })
   it('delete requires confirm and journals the full transaction for restore', async () => {
     const client = { request: vi.fn(async (path: string, opts: any) => {
@@ -128,8 +161,8 @@ describe('writes', () => {
 describe('updateTransactions undo fidelity', () => {
   it('inverse is API wire form (snake_case, milliunits) and ignores undefined keys — the way the MCP tool layer passes them', async () => {
     const priorTxn = apiTxn({ category_id: 'c-old', approved: false })
-    const client = { request: vi.fn(async (path: string, opts: any) => {
-      if (path.endsWith('/transactions/t1') && !opts?.method) return { transaction: priorTxn }
+    const client = { request: vi.fn(async (_path: string, opts: any) => {
+      if (!opts?.method) return { transactions: [priorTxn] }
       return { transactions: [] }
     }) } as any
     const y = new Ynab({ client, journal, allowWrites: true })
@@ -154,8 +187,8 @@ describe('updateTransactions undo fidelity', () => {
   })
   it('carries the prior amount in MILLIUNITS when amount was updated', async () => {
     const priorTxn = apiTxn({ amount: -50000 })
-    const client = { request: vi.fn(async (path: string, opts: any) => {
-      if (path.endsWith('/transactions/t1') && !opts?.method) return { transaction: priorTxn }
+    const client = { request: vi.fn(async (_path: string, opts: any) => {
+      if (!opts?.method) return { transactions: [priorTxn] }
       return { transactions: [] }
     }) } as any
     const y = new Ynab({ client, journal, allowWrites: true })

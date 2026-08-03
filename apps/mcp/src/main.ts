@@ -2,7 +2,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { Ynab, YnabClient, DeltaCache, UndoJournal, LedgerStore, RateLimiter } from '@walensis/cove-core'
-import { resolveEnv } from './env.js'
+import { resolveEnv, WRITE_DISABLED_HINT } from './env.js'
 import { buildServer } from './server.js'
 
 let resolved
@@ -15,6 +15,7 @@ const ynab = new Ynab({
   journal: new UndoJournal(join(homedir(), '.cove', 'undo.json')),
   ledger: new LedgerStore(join(homedir(), '.cove', 'ledger.json')),
   allowWrites,
+  writeDisabledHint: WRITE_DISABLED_HINT,
 })
 const server = buildServer(ynab, limiter)
 await server.connect(new StdioServerTransport())

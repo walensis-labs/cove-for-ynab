@@ -26,9 +26,8 @@ function toEvidenceComponent(c: AttributionComponent) {
 }
 
 export class WriteDisabledError extends Error {
-  constructor() {
-    super('Writes are disabled. This server runs read-only by default to protect your budget. ' +
-      'To enable writes, set the environment variable YNAB_ALLOW_WRITES=1 in your MCP server config and restart.')
+  constructor(hint?: string) {
+    super('Writes are disabled on this server.' + (hint ? ` ${hint}` : ''))
   }
 }
 
@@ -41,6 +40,9 @@ export class ConfirmationRequiredError extends Error {
 
 const DAY = 86_400_000
 function defaultSince(): string { return new Date(Date.now() - 365 * DAY).toISOString().slice(0, 10) }
+/** Earlier than any real YNAB transaction — used where we need "all history, no date window" from an
+ * endpoint that (per YNAB API changelog v1.85.0) defaults `since_date` to one year ago when omitted. */
+const FAR_PAST_SINCE_DATE = '2000-01-01'
 function currentMonthUTC(): string {
   const now = new Date()
   return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`
@@ -101,18 +103,59 @@ const TXN_UPDATE_API_KEY: Record<string, string> = {
   categoryId: 'category_id', memo: 'memo', cleared: 'cleared', approved: 'approved', flagColor: 'flag_color',
 }
 
+const NOT_REVERSIBLE = "This can't be reversed — the YNAB API has no way to delete"
+
+/**
+ * Human-readable "what changed, reverted" clauses for a single transaction update, built from the
+ * PRIOR (pre-write) Txn snapshot — this is what proves updateTransactions' inverse describes the
+ * old values, not the ones just written. Only fields actually present in `update` are described;
+ * a field the caller never touched has no "back to X" clause.
+ */
+function txnRevertClauses(prior: Txn, update: Record<string, unknown>): string[] {
+  const clauses: string[] = []
+  if (update.categoryId !== undefined) clauses.push(`category back to ${prior.categoryName ?? '(uncategorized)'}`)
+  if (update.payeeId !== undefined || update.payeeName !== undefined) clauses.push(`payee back to ${prior.payeeName ?? '(no payee)'}`)
+  if (update.amount !== undefined) clauses.push(`amount back to ${formatDollars(prior.amount)}`)
+  if (update.memo !== undefined) clauses.push(`memo back to ${prior.memo ? JSON.stringify(prior.memo) : '(empty)'}`)
+  if (update.cleared !== undefined) clauses.push(`cleared status back to ${prior.cleared}`)
+  if (update.approved !== undefined) clauses.push(`approved back to ${prior.approved}`)
+  if (update.flagColor !== undefined) clauses.push(`flag color back to ${prior.flagColor ?? '(none)'}`)
+  if (update.date !== undefined) clauses.push(`date back to ${prior.date}`)
+  return clauses
+}
+
+const CATEGORY_FIELD_LABEL: Record<string, string> = {
+  name: 'name', hidden: 'hidden', goal_target: 'goal target',
+  goal_target_date: 'goal target date', goal_frequency: 'goal frequency', goal_needs_whole_amount: 'goal needs whole amount',
+}
+
+/** Plain-language "field back to prior value" clauses for updateCategory's inverse, keyed off the
+ * API-wire `body` that was just sent (so only fields the caller actually changed are described). */
+function categoryInverseClauses(body: Record<string, unknown>, prior: any): string {
+  const keys = Object.keys(body)
+  if (keys.length === 0) return 'nothing — no fields differed from their prior values'
+  return keys.map((k) => {
+    const label = CATEGORY_FIELD_LABEL[k] ?? k
+    const priorVal = prior[k] ?? null
+    const display = k === 'goal_target' ? (priorVal == null ? 'none' : formatDollars(milliToDollars(priorVal as number))) : priorVal == null ? '(none)' : String(priorVal)
+    return `${label} back to ${display}`
+  }).join(', ')
+}
+
 export class Ynab {
   readonly client: YnabClient
   readonly cache?: DeltaCache
   readonly journal?: UndoJournal
   readonly allowWrites: boolean
   readonly ledger?: LedgerLike
+  readonly writeDisabledHint?: string
 
-  constructor(opts: { client: YnabClient; cache?: DeltaCache; journal?: UndoJournal; allowWrites: boolean; ledger?: LedgerLike }) {
+  constructor(opts: { client: YnabClient; cache?: DeltaCache; journal?: UndoJournal; allowWrites: boolean; ledger?: LedgerLike; writeDisabledHint?: string }) {
     this.client = opts.client; this.cache = opts.cache; this.journal = opts.journal; this.allowWrites = opts.allowWrites; this.ledger = opts.ledger
+    this.writeDisabledHint = opts.writeDisabledHint
   }
 
-  assertWrites(): void { if (!this.allowWrites) throw new WriteDisabledError() }
+  assertWrites(): void { if (!this.allowWrites) throw new WriteDisabledError(this.writeDisabledHint) }
 
   async listPlans() {
     const data = await this.client.request<any>('/plans')
@@ -232,13 +275,40 @@ export class Ynab {
     return { created: ids.length, ids }
   }
 
+  /**
+   * Fetches the current state of a specific set of transactions in ONE request, not one per id.
+   * updateTransactions needs prior values before it writes (to build its `inverse`, and the local
+   * undo journal's patch_transactions op) — a naive Promise.all(ids.map(getTransaction)) would cost
+   * one request per row, which on a 40-row bulk update alone would burn 20% of YNAB's 200/hr limit.
+   * The plan-wide transactions list is one call regardless of how many ids we're after.
+   *
+   * Must pass an explicit since_date: per YNAB API changelog v1.85.0, listing endpoints default
+   * since_date to one year ago when the query param is omitted. The single per-row GET this replaced
+   * (plan transactions by-id) had no date window at all, so an unqualified bulk read here would
+   * silently narrow coverage — rows older than ~1 year would fail to be found below. Uses
+   * FAR_PAST_SINCE_DATE, the same "all history" convention as getNetWorthHistory's #allTxns call.
+   */
+  async #getTransactionsByIds(planId: string, ids: string[]): Promise<Map<string, Txn>> {
+    const wanted = new Set(ids)
+    const found = new Map<string, Txn>()
+    for (const t of await this.#allTxns(planId, FAR_PAST_SINCE_DATE)) {
+      if (wanted.has(t.id)) found.set(t.id, t)
+    }
+    return found
+  }
+
   async updateTransactions(planId: string, updates: ({ id: string } & Partial<Pick<NewTxn, 'date' | 'amount' | 'payeeId' | 'payeeName' | 'categoryId' | 'memo' | 'cleared' | 'approved' | 'flagColor'>>)[], opts: { confirm?: boolean; expectedCount?: number } = {}) {
     this.assertWrites()
     if (updates.length > 5) {
       if (!opts.confirm || opts.expectedCount === undefined) throw new ConfirmationRequiredError('Bulk transaction update (>5 rows)')
       if (opts.expectedCount !== updates.length) throw new Error(`expected_count (${opts.expectedCount}) does not match the ${updates.length} rows provided — aborting; re-check the update set.`)
     }
-    const prior = await Promise.all(updates.map((u) => this.getTransaction(planId, u.id)))
+    const priorById = await this.#getTransactionsByIds(planId, updates.map((u) => u.id))
+    const prior = updates.map((u) => {
+      const p = priorById.get(u.id)
+      if (!p) throw new Error(`Transaction ${u.id} not found — cannot read its prior values before updating it.`)
+      return p
+    })
     // The inverse must be in API wire form (snake_case, milliunits): undoLast PATCHes it straight
     // through to the API, unlike `prior` which is the camelCase/dollars Txn shape from getTransaction.
     // Keys whose update value is undefined (the MCP tool layer sends all fields, most undefined) are
@@ -254,11 +324,21 @@ export class Ynab {
       }
       return changed
     }) }]
+    // Plain-language inverse for the hosted tier (no undo journal there — the conversation carries
+    // this instead). Built from `prior`, fetched above BEFORE the write below.
+    const rowSummaries = updates.map((u, i) => {
+      const clauses = txnRevertClauses(prior[i]!, u as Record<string, unknown>)
+      if (clauses.length === 0) return null
+      return `${prior[i]!.payeeName ?? prior[i]!.id}: ${clauses.join(', ')}`
+    }).filter((s): s is string => s !== null)
+    const inverseText = rowSummaries.length > 0
+      ? `To reverse: restore ${rowSummaries.length} transaction(s) — ${rowSummaries.join('; ')}.`
+      : 'Nothing changed — no fields differed from their prior values.'
     const jid = this.journal?.begin(`update ${updates.length} transaction(s)`, inverse)
     await this.client.request<any>(`/plans/${planId}/transactions`, { method: 'PATCH', body: { transactions: updates.map((u) => ({ id: u.id, ...this.#toApiTxn(u) })) } })
     if (jid) this.journal!.commit(jid)
     this.cache?.invalidate(planId)
-    return { updated: updates.length }
+    return { updated: updates.length, inverse: inverseText }
   }
 
   async deleteTransaction(planId: string, id: string, opts: { confirm?: boolean } = {}) {
@@ -310,7 +390,7 @@ export class Ynab {
     const jid = this.journal?.begin(`create category "${opts.name}" (not undoable — YNAB's API has no category delete)`, [], { undoable: false })
     if (jid) this.journal!.commit(jid)
     this.cache?.invalidate(planId)
-    return { id: data.category.id, name: data.category.name }
+    return { id: data.category.id, name: data.category.name, inverse: `${NOT_REVERSIBLE} a category. If you don't want "${data.category.name}", hide it instead (update_category with hidden: true).` }
   }
 
   async updateCategory(planId: string, categoryId: string, patch: { name?: string; hidden?: boolean; goalTarget?: number | null; goalTargetDate?: string | null; goalFrequency?: 'monthly' | 'weekly' | 'yearly' | null; goalNeedsWholeAmount?: boolean | null }) {
@@ -329,26 +409,31 @@ export class Ynab {
     await this.client.request(`/plans/${planId}/categories/${categoryId}`, { method: 'PATCH', body: { category: body } })
     if (jid) this.journal!.commit(jid)
     this.cache?.invalidate(planId)
-    return { updated: categoryId }
+    return { updated: categoryId, inverse: `To reverse: for category "${prior.name}", set ${categoryInverseClauses(body, prior)}.` }
   }
 
   async #patchMonthCategory(planId: string, month: string, categoryId: string, budgetedMilli: number): Promise<any> {
     return this.client.request<any>(`/plans/${planId}/months/${month}/categories/${categoryId}`, { method: 'PATCH', body: { category: { budgeted: budgetedMilli } } })
   }
 
-  async assignBudget(planId: string, month: string, categoryId: string, amount: number, reason?: string) {
+  async assignBudget(planId: string, month: string, categoryId: string, amount: number, reason?: string, opts: { confirm?: boolean } = {}) {
     this.assertWrites()
+    if (!opts.confirm) throw new ConfirmationRequiredError('Assigning budget to a category')
     const prior = (await this.client.request<any>(`/plans/${planId}/months/${month}/categories/${categoryId}`)).category
     const suffix = reason ? ` — reason: ${reason}` : ''
     const jid = this.journal?.begin(`assign ${amount} to category in ${month}${suffix}`, [{ kind: 'assign_budget', planId, month, categoryId, budgetedMilli: prior.budgeted }])
     await this.#patchMonthCategory(planId, month, categoryId, dollarsToMilli(amount))
     if (jid) this.journal!.commit(jid)
     this.cache?.invalidate(planId)
-    return { month, categoryId, assigned: amount, ...(reason ? { reason } : {}) }
+    // Symmetric — no extra API call: `prior` was already fetched above for the undo journal, so its
+    // name/budgeted give us the reverse assignment for free.
+    const inverse = `To reverse: set the assigned amount for ${prior.name ?? categoryId} in ${month} back to ${formatDollars(milliToDollars(prior.budgeted))} (it was just changed to ${formatDollars(amount)}).`
+    return { month, categoryId, assigned: amount, ...(reason ? { reason } : {}), inverse }
   }
 
-  async moveMoney(planId: string, month: string, fromCategoryId: string, toCategoryId: string, amount: number, reason?: string) {
+  async moveMoney(planId: string, month: string, fromCategoryId: string, toCategoryId: string, amount: number, reason?: string, opts: { confirm?: boolean } = {}) {
     this.assertWrites()
+    if (!opts.confirm) throw new ConfirmationRequiredError('Moving money between categories')
     const [from, to] = await Promise.all([
       this.client.request<any>(`/plans/${planId}/months/${month}/categories/${fromCategoryId}`),
       this.client.request<any>(`/plans/${planId}/months/${month}/categories/${toCategoryId}`),
@@ -380,7 +465,12 @@ export class Ynab {
     }
     if (jid) this.journal!.commit(jid)
     this.cache?.invalidate(planId)
-    return { moved: amount, from: { id: fromCategoryId, assigned: milliToDollars(fromPrior - milli) }, to: { id: toCategoryId, assigned: milliToDollars(toPrior + milli) }, ...(reason ? { reason } : {}) }
+    // Symmetric — no extra API call: `from`/`to` were already fetched above for the undo journal;
+    // their names give a readable reverse-direction description for free.
+    const fromName = from.category.name ?? fromCategoryId
+    const toName = to.category.name ?? toCategoryId
+    const inverse = `To reverse: move ${formatDollars(amount)} from ${toName} back to ${fromName}.`
+    return { moved: amount, from: { id: fromCategoryId, assigned: milliToDollars(fromPrior - milli) }, to: { id: toCategoryId, assigned: milliToDollars(toPrior + milli) }, ...(reason ? { reason } : {}), inverse }
   }
 
   async renamePayee(planId: string, payeeId: string, name: string) {
@@ -390,7 +480,7 @@ export class Ynab {
     await this.client.request(`/plans/${planId}/payees/${payeeId}`, { method: 'PATCH', body: { payee: { name } } })
     if (jid) this.journal!.commit(jid)
     this.cache?.invalidate(planId)
-    return { renamed: payeeId }
+    return { renamed: payeeId, inverse: `To reverse: rename the payee back to "${prior.name}" (it was just renamed to "${name}").` }
   }
 
   async createPayee(planId: string, name: string) {
@@ -399,7 +489,7 @@ export class Ynab {
     const jid = this.journal?.begin(`create payee "${name}" (not undoable — YNAB's API has no payee delete)`, [], { undoable: false })
     if (jid) this.journal!.commit(jid)
     this.cache?.invalidate(planId)
-    return { id: data.payee.id, name: data.payee.name }
+    return { id: data.payee.id, name: data.payee.name, inverse: `${NOT_REVERSIBLE} a payee. If you don't want "${data.payee.name}", rename it instead (rename_payee).` }
   }
 
   async createAccount(planId: string, opts: { name: string; type: 'checking' | 'savings' | 'cash' | 'creditCard' | 'otherAsset' | 'otherLiability'; balance: number }) {
@@ -570,7 +660,7 @@ export class Ynab {
   }
 
   async getNetWorthHistory(planId: string) {
-    return netWorthHistory(await this.#allTxns(planId, '2000-01-01'))
+    return netWorthHistory(await this.#allTxns(planId, FAR_PAST_SINCE_DATE))
   }
 
   async #monthCloseRaw(planId: string, cutoff: string, lookbackDays: number) {
