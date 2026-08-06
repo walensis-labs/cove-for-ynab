@@ -15,13 +15,20 @@ const BLOCKER_CAP = 50
 
 function toEvidenceComponent(c: AttributionComponent) {
   const { cause, amountMilli, evidence } = c
+  const amount = milliToDollars(amountMilli)
+  const assigned = evidence.assignedMilli !== undefined ? milliToDollars(evidence.assignedMilli) : undefined
+  const priorRed = evidence.priorRedMilli !== undefined ? milliToDollars(evidence.priorRedMilli) : undefined
+  const residual = evidence.residualMilli !== undefined ? milliToDollars(evidence.residualMilli) : undefined
   return {
     cause,
-    amount: milliToDollars(amountMilli),
-    ...(evidence.assignedMilli !== undefined ? { assigned: milliToDollars(evidence.assignedMilli) } : {}),
-    ...(evidence.priorRedMilli !== undefined ? { priorRed: milliToDollars(evidence.priorRedMilli) } : {}),
-    ...(evidence.residualMilli !== undefined ? { residual: milliToDollars(evidence.residualMilli) } : {}),
-    ...(evidence.txns !== undefined ? { txns: evidence.txns.map((t) => ({ id: t.id, date: t.date, amount: milliToDollars(t.amountMilli) })) } : {}),
+    amount, amountText: formatDollars(amount),
+    ...(assigned !== undefined ? { assigned, assignedText: formatDollars(assigned) } : {}),
+    ...(priorRed !== undefined ? { priorRed, priorRedText: formatDollars(priorRed) } : {}),
+    ...(residual !== undefined ? { residual, residualText: formatDollars(residual) } : {}),
+    ...(evidence.txns !== undefined ? { txns: evidence.txns.map((t) => {
+      const txnAmount = milliToDollars(t.amountMilli)
+      return { id: t.id, date: t.date, amount: txnAmount, amountText: formatDollars(txnAmount) }
+    }) } : {}),
   }
 }
 
@@ -71,19 +78,27 @@ export interface NewTxn {
 }
 
 function mapCategory(c: any): CategorySnapshot {
+  const assigned = d(c.budgeted)
+  const activity = d(c.activity)
+  const available = d(c.balance)
+  const goalTarget = c.goal_type ? d(c.goal_target ?? 0) : null
+  const goalUnderFunded = c.goal_under_funded == null ? null : d(c.goal_under_funded)
   return {
     id: c.id, name: c.name, group: c.category_group_name ?? '', hidden: !!c.hidden,
-    assigned: d(c.budgeted), activity: d(c.activity), available: d(c.balance),
+    assigned, assignedText: formatDollars(assigned),
+    activity, activityText: formatDollars(activity),
+    available, availableText: formatDollars(available),
     goalType: c.goal_type ?? null,
-    goalTarget: c.goal_type ? d(c.goal_target ?? 0) : null,
-    goalUnderFunded: c.goal_under_funded == null ? null : d(c.goal_under_funded),
+    goalTarget, goalTargetText: goalTarget === null ? null : formatDollars(goalTarget),
+    goalUnderFunded, goalUnderFundedText: goalUnderFunded === null ? null : formatDollars(goalUnderFunded),
     goalPercentageComplete: c.goal_percentage_complete ?? null,
   }
 }
 
 export function mapTxn(t: any): Txn {
+  const amount = d(t.amount)
   return {
-    id: t.id, date: t.date, amount: d(t.amount),
+    id: t.id, date: t.date, amount, amountText: formatDollars(amount),
     payeeName: t.payee_name ?? null, payeeId: t.payee_id ?? null,
     categoryName: t.category_name ?? null, categoryId: t.category_id ?? null,
     accountName: t.account_name ?? '', accountId: t.account_id,
@@ -91,7 +106,10 @@ export function mapTxn(t: any): Txn {
     flagColor: t.flag_color ?? null, transferAccountId: t.transfer_account_id ?? null,
     importId: t.import_id ?? null,
     ...(t.subtransactions?.length
-      ? { subtransactions: t.subtransactions.filter((s: any) => !s.deleted).map((s: any) => ({ amount: d(s.amount), categoryName: s.category_name ?? null, memo: s.memo ?? null })) }
+      ? { subtransactions: t.subtransactions.filter((s: any) => !s.deleted).map((s: any) => {
+          const subAmount = d(s.amount)
+          return { amount: subAmount, amountText: formatDollars(subAmount), categoryName: s.category_name ?? null, memo: s.memo ?? null }
+        }) }
       : {}),
   }
 }
@@ -189,10 +207,13 @@ export class Ynab {
 
   async listScheduled(planId: string): Promise<ScheduledSnapshot[]> {
     const data = await this.client.request<any>(`/plans/${planId}/scheduled_transactions`)
-    return data.scheduled_transactions.filter((s: any) => !s.deleted).map((s: any) => ({
-      id: s.id, dateNext: s.date_next, frequency: s.frequency, amount: d(s.amount),
-      payeeName: s.payee_name ?? null, categoryName: s.category_name ?? null, memo: s.memo ?? null,
-    }))
+    return data.scheduled_transactions.filter((s: any) => !s.deleted).map((s: any) => {
+      const amount = d(s.amount)
+      return {
+        id: s.id, dateNext: s.date_next, frequency: s.frequency, amount, amountText: formatDollars(amount),
+        payeeName: s.payee_name ?? null, categoryName: s.category_name ?? null, memo: s.memo ?? null,
+      }
+    })
   }
 
   async getPlanOverview(planId: string) {
@@ -202,11 +223,16 @@ export class Ynab {
       this.getMonth(planId, 'current'),
     ])
     const plan = plans.find((p: any) => p.id === planId) ?? { id: planId, name: '(current plan)', currency: 'USD' }
-    const accounts = accountsData.accounts.filter((a: any) => !a.deleted && !a.closed).map((a: any) => ({
-      id: a.id, name: a.name, type: a.type, onBudget: !!a.on_budget,
-      balance: d(a.balance), cleared: d(a.cleared_balance), uncleared: d(a.uncleared_balance),
-      lastReconciledAt: a.last_reconciled_at ?? null,
-    }))
+    const accounts = accountsData.accounts.filter((a: any) => !a.deleted && !a.closed).map((a: any) => {
+      const balance = d(a.balance), cleared = d(a.cleared_balance), uncleared = d(a.uncleared_balance)
+      return {
+        id: a.id, name: a.name, type: a.type, onBudget: !!a.on_budget,
+        balance, balanceText: formatDollars(balance),
+        cleared, clearedText: formatDollars(cleared),
+        uncleared, unclearedText: formatDollars(uncleared),
+        lastReconciledAt: a.last_reconciled_at ?? null,
+      }
+    })
     const groups = new Map<string, { assigned: number; activity: number; available: number }>()
     for (const c of month.categories) {
       const g = groups.get(c.group) ?? { assigned: 0, activity: 0, available: 0 }
@@ -215,11 +241,22 @@ export class Ynab {
     }
     const budgeted = month.categories.reduce((s: number, c: CategorySnapshot) => s + c.assigned, 0)
     const activity = month.categories.reduce((s: number, c: CategorySnapshot) => s + c.activity, 0)
+    const roundedActivity = Math.round(activity * 100) / 100
+    const roundedBudgeted = Math.round(budgeted * 100) / 100
     return {
       plan: { id: plan.id, name: plan.name, currency: plan.currency },
-      month: { month: month.month, readyToAssign: month.readyToAssign, ageOfMoney: month.ageOfMoney, activity: Math.round(activity * 100) / 100, budgeted: Math.round(budgeted * 100) / 100 },
+      month: {
+        month: month.month, readyToAssign: month.readyToAssign, readyToAssignText: formatDollars(month.readyToAssign),
+        ageOfMoney: month.ageOfMoney, activity: roundedActivity, activityText: formatDollars(roundedActivity),
+        budgeted: roundedBudgeted, budgetedText: formatDollars(roundedBudgeted),
+      },
       accounts,
-      categoryGroups: [...groups.entries()].map(([name, v]) => ({ name, assigned: Math.round(v.assigned * 100) / 100, activity: Math.round(v.activity * 100) / 100, available: Math.round(v.available * 100) / 100 })),
+      categoryGroups: [...groups.entries()].map(([name, v]) => {
+        const assigned = Math.round(v.assigned * 100) / 100
+        const groupActivity = Math.round(v.activity * 100) / 100
+        const available = Math.round(v.available * 100) / 100
+        return { name, assigned, assignedText: formatDollars(assigned), activity: groupActivity, activityText: formatDollars(groupActivity), available, availableText: formatDollars(available) }
+      }),
     }
   }
 
@@ -428,7 +465,7 @@ export class Ynab {
     // Symmetric — no extra API call: `prior` was already fetched above for the undo journal, so its
     // name/budgeted give us the reverse assignment for free.
     const inverse = `To reverse: set the assigned amount for ${prior.name ?? categoryId} in ${month} back to ${formatDollars(milliToDollars(prior.budgeted))} (it was just changed to ${formatDollars(amount)}).`
-    return { month, categoryId, assigned: amount, ...(reason ? { reason } : {}), inverse }
+    return { month, categoryId, assigned: amount, assignedText: formatDollars(amount), ...(reason ? { reason } : {}), inverse }
   }
 
   async moveMoney(planId: string, month: string, fromCategoryId: string, toCategoryId: string, amount: number, reason?: string, opts: { confirm?: boolean } = {}) {
@@ -446,6 +483,11 @@ export class Ynab {
       { kind: 'assign_budget', planId, month, categoryId: fromCategoryId, budgetedMilli: fromPrior },
       { kind: 'assign_budget', planId, month, categoryId: toCategoryId, budgetedMilli: toPrior },
     ])
+    // Symmetric — no extra API call: `from`/`to` were already fetched above for the undo journal;
+    // their names give a readable reverse-direction description for free, and let a half-applied
+    // failure below name which category holds what now.
+    const fromName = from.category.name ?? fromCategoryId
+    const toName = to.category.name ?? toCategoryId
     await this.#patchMonthCategory(planId, month, fromCategoryId, fromPrior - milli)
     try {
       await this.#patchMonthCategory(planId, month, toCategoryId, toPrior + milli)
@@ -455,22 +497,36 @@ export class Ynab {
       } catch (rollbackErr) {
         // Rollback itself failed: the move is now half-applied (money left fromCategoryId but never
         // reached toCategoryId). Commit the journal entry — its two assign_budget inverses are exactly
-        // the repair needed — so undo_last can restore both categories.
+        // the repair needed.
         if (jid) this.journal!.commit(jid)
         this.cache?.invalidate(planId)
-        throw new Error(`${(e as Error).message}; rollback also failed: ${(rollbackErr as Error).message} — ` +
-          `the move is half-applied; run undo_last to restore both categories.`)
+        const lead = `${(e as Error).message}; rollback also failed: ${(rollbackErr as Error).message} — the move is half-applied`
+        // Journal present (e.g. the local/desktop deployment): undo_last can replay the two
+        // assign_budget inverses just committed above, so today's instruction is still true.
+        // No journal (the hosted tier passes none — buildYnab): undo_last isn't registered, so naming
+        // it would be a false deployment fact. State plainly which category holds what now and give
+        // the manual correction instead.
+        if (this.journal) {
+          throw new Error(`${lead}; run undo_last to restore both categories.`)
+        }
+        throw new Error(`${lead}: "${fromName}" is short ${formatDollars(amount)} ` +
+          `(now ${formatDollars(milliToDollars(fromPrior - milli))}, was ${formatDollars(milliToDollars(fromPrior))}); ` +
+          `"${toName}" was never credited (still ${formatDollars(milliToDollars(toPrior))}). ` +
+          `To fix it, manually assign ${formatDollars(amount)} back to "${fromName}".`)
       }
       throw new Error(`${(e as Error).message} — the first half of the move was rolled back; no money moved.`)
     }
     if (jid) this.journal!.commit(jid)
     this.cache?.invalidate(planId)
-    // Symmetric — no extra API call: `from`/`to` were already fetched above for the undo journal;
-    // their names give a readable reverse-direction description for free.
-    const fromName = from.category.name ?? fromCategoryId
-    const toName = to.category.name ?? toCategoryId
     const inverse = `To reverse: move ${formatDollars(amount)} from ${toName} back to ${fromName}.`
-    return { moved: amount, from: { id: fromCategoryId, assigned: milliToDollars(fromPrior - milli) }, to: { id: toCategoryId, assigned: milliToDollars(toPrior + milli) }, ...(reason ? { reason } : {}), inverse }
+    const fromAssigned = milliToDollars(fromPrior - milli)
+    const toAssigned = milliToDollars(toPrior + milli)
+    return {
+      moved: amount, movedText: formatDollars(amount),
+      from: { id: fromCategoryId, assigned: fromAssigned, assignedText: formatDollars(fromAssigned) },
+      to: { id: toCategoryId, assigned: toAssigned, assignedText: formatDollars(toAssigned) },
+      ...(reason ? { reason } : {}), inverse,
+    }
   }
 
   async renamePayee(planId: string, payeeId: string, name: string) {
@@ -687,19 +743,26 @@ export class Ynab {
     warnings.push(...matchWarnings)
     const perCard = matches.map(({ account, category }) => {
       const b = balances.get(account.id)!
+      const workingAsOf = milliToDollars(b.workingMilli)
+      const clearedAsOf = milliToDollars(b.clearedMilli)
+      const availableAtMonthEnd = milliToDollars(category.balance)
+      const gap = milliToDollars(b.workingMilli + category.balance)
       return {
         account: account.name,
-        workingAsOf: milliToDollars(b.workingMilli),
-        clearedAsOf: milliToDollars(b.clearedMilli),
-        availableAtMonthEnd: milliToDollars(category.balance),
-        gap: milliToDollars(b.workingMilli + category.balance),
+        workingAsOf, workingAsOfText: formatDollars(workingAsOf),
+        clearedAsOf, clearedAsOfText: formatDollars(clearedAsOf),
+        availableAtMonthEnd, availableAtMonthEndText: formatDollars(availableAtMonthEnd),
+        gap, gapText: formatDollars(gap),
         paymentCategoryId: category.id,
       }
     })
     const onBudget = new Set(accounts.filter((a) => a.on_budget && !a.closed).map((a) => a.id))
     const accountName = new Map(accounts.map((a) => [a.id, a.name]))
     const raw = findBlockers(txns, cutoff, onBudget)
-    const row = (t: RawTxn) => ({ id: t.id, date: t.date, payee: t.payee_name ?? null, account: t.account_name ?? accountName.get(t.account_id) ?? t.account_id, amount: milliToDollars(t.amount) })
+    const row = (t: RawTxn) => {
+      const amount = milliToDollars(t.amount)
+      return { id: t.id, date: t.date, payee: t.payee_name ?? null, account: t.account_name ?? accountName.get(t.account_id) ?? t.account_id, amount, amountText: formatDollars(amount) }
+    }
     const cap = <T>(list: T[], label: string): T[] => {
       if (list.length > BLOCKER_CAP) warnings.push(`${label}: showing ${BLOCKER_CAP} of ${list.length} — resolve and re-run.`)
       return list.slice(0, BLOCKER_CAP)
@@ -719,8 +782,15 @@ export class Ynab {
         uncategorized: cap(raw.uncategorized, 'uncategorized').map(row),
         unclearedBeforeCutoff: cap(raw.unclearedBeforeCutoff, 'unclearedBeforeCutoff').map(row),
       },
-      redCategories: reds.map((c) => ({ id: c.id, name: c.name, available: milliToDollars(c.balance), group: c.category_group_name ?? '' })),
-      donors: donors.map((d) => ({ id: d.cat.id, name: d.cat.name, group: d.cat.category_group_name ?? '', available: milliToDollars(d.cat.balance), excess: milliToDollars(d.excessMilli), hasTarget: d.cat.goal_type != null })),
+      redCategories: reds.map((c) => {
+        const available = milliToDollars(c.balance)
+        return { id: c.id, name: c.name, available, availableText: formatDollars(available), group: c.category_group_name ?? '' }
+      }),
+      donors: donors.map((d) => {
+        const available = milliToDollars(d.cat.balance)
+        const excess = milliToDollars(d.excessMilli)
+        return { id: d.cat.id, name: d.cat.name, group: d.cat.category_group_name ?? '', available, availableText: formatDollars(available), excess, excessText: formatDollars(excess), hasTarget: d.cat.goal_type != null }
+      }),
     }
   }
 
@@ -729,12 +799,20 @@ export class Ynab {
     const reds = findRedCategories(monthCats)
     const donors = rankDonors(monthCats, new Set(reds.map((c) => c.id)))
     const res = proposeMoves(reds, donors, rtaMilli, opts.strategy ?? 'donors_first')
+    const rtaUsed = milliToDollars(res.rtaUsedMilli)
+    const rtaRemaining = milliToDollars(res.rtaRemainingMilli)
     return {
       month: opts.cutoff.slice(0, 8) + '01',
-      moves: res.moves.map((m) => ({ from: m.fromName, fromId: m.fromId, to: m.toName, toId: m.toId, amount: milliToDollars(m.amountMilli), source: m.source })),
-      unfundable: res.unfundable.map((u) => ({ id: u.id, name: u.name, needed: milliToDollars(u.neededMilli) })),
-      rtaUsed: milliToDollars(res.rtaUsedMilli),
-      rtaRemaining: milliToDollars(res.rtaRemainingMilli),
+      moves: res.moves.map((m) => {
+        const amount = milliToDollars(m.amountMilli)
+        return { from: m.fromName, fromId: m.fromId, to: m.toName, toId: m.toId, amount, amountText: formatDollars(amount), source: m.source }
+      }),
+      unfundable: res.unfundable.map((u) => {
+        const needed = milliToDollars(u.neededMilli)
+        return { id: u.id, name: u.name, needed, neededText: formatDollars(needed) }
+      }),
+      rtaUsed, rtaUsedText: formatDollars(rtaUsed),
+      rtaRemaining, rtaRemainingText: formatDollars(rtaRemaining),
     }
   }
 
@@ -770,7 +848,12 @@ export class Ynab {
     const h = await this.#categoryHistoryMilli(planId, opts)
     return {
       category: { id: opts.categoryId, name: h.name },
-      points: h.pointsMilli.map((p) => ({ month: p.month, assigned: milliToDollars(p.assignedMilli), activity: milliToDollars(p.activityMilli), available: milliToDollars(p.availableMilli) })),
+      points: h.pointsMilli.map((p) => {
+        const assigned = milliToDollars(p.assignedMilli)
+        const activity = milliToDollars(p.activityMilli)
+        const available = milliToDollars(p.availableMilli)
+        return { month: p.month, assigned, assignedText: formatDollars(assigned), activity, activityText: formatDollars(activity), available, availableText: formatDollars(available) }
+      }),
       skippedMonths: h.skippedMonths,
     }
   }
@@ -808,10 +891,18 @@ export class Ynab {
     return {
       account,
       points: series.map((p): {
-        month: string; owed: number; available: number; gap: number; changed: boolean; gapChange: number
+        month: string; owed: number; owedText: string; available: number; availableText: string
+        gap: number; gapText: string; changed: boolean; gapChange: number; gapChangeText: string
         direction: 'grew' | 'shrank' | 'flat'; cause?: GapCause; evidence?: { components: ReturnType<typeof toEvidenceComponent>[] }
       } => {
-        const base = { month: p.month, owed: milliToDollars(p.owedMilli), available: milliToDollars(p.availableMilli), gap: milliToDollars(p.gapMilli), changed: p.changed, gapChange: milliToDollars(p.gapChangeMilli), direction: p.direction }
+        const owed = milliToDollars(p.owedMilli)
+        const available = milliToDollars(p.availableMilli)
+        const gap = milliToDollars(p.gapMilli)
+        const gapChange = milliToDollars(p.gapChangeMilli)
+        const base = {
+          month: p.month, owed, owedText: formatDollars(owed), available, availableText: formatDollars(available),
+          gap, gapText: formatDollars(gap), changed: p.changed, gapChange, gapChangeText: formatDollars(gapChange), direction: p.direction,
+        }
         if (!p.changed) return base
         const a = attrByMonth.get(p.month)
         if (!a || a.components.length === 0) return base
@@ -843,10 +934,20 @@ export class Ynab {
 
     const records = recordableSeries.map((p) => {
       const workingAsOf = milliToDollars(-p.owedMilli)
-      const causes = (attrByMonth.get(p.month)?.components ?? []).map((c) => ({ month: p.month, change: milliToDollars(c.amountMilli), cause: c.cause as string }))
+      const availableAtMonthEnd = milliToDollars(p.availableMilli)
+      const gap = milliToDollars(p.gapMilli)
+      const causes = (attrByMonth.get(p.month)?.components ?? []).map((c) => {
+        const change = milliToDollars(c.amountMilli)
+        return { month: p.month, change, changeText: formatDollars(change), cause: c.cause as string }
+      })
       return {
         planId, cutoff: lastDayOf(p.month), gapStatus: 'final' as const,
-        perCard: [{ account, workingAsOf, clearedAsOf: workingAsOf, availableAtMonthEnd: milliToDollars(p.availableMilli), gap: milliToDollars(p.gapMilli) }],
+        perCard: [{
+          account, workingAsOf, workingAsOfText: formatDollars(workingAsOf),
+          clearedAsOf: workingAsOf, clearedAsOfText: formatDollars(workingAsOf),
+          availableAtMonthEnd, availableAtMonthEndText: formatDollars(availableAtMonthEnd),
+          gap, gapText: formatDollars(gap),
+        }],
         blockers: { unapproved: 0, uncategorized: 0, unclearedBeforeCutoff: 0 },
         causes,
         note: 'backfill: cleared state not reconstructable historically, blockers not reconstructable',
@@ -879,10 +980,15 @@ export class Ynab {
       const primary = a && a.components.length > 0
         ? a.components.reduce((best, c) => (Math.abs(c.amountMilli) > Math.abs(best.amountMilli) ? c : best))
         : undefined
-      return { month: p.month, gapChange: milliToDollars(p.gapChangeMilli), cause: (primary?.cause ?? 'unattributed') as GapCause }
+      const gapChange = milliToDollars(p.gapChangeMilli)
+      return { month: p.month, gapChange, gapChangeText: formatDollars(gapChange), cause: (primary?.cause ?? 'unattributed') as GapCause }
     })
 
-    return { account, monthsWritten: written.length, discovery: { currentGap, nonZeroSince, sinceAtLeast, summary }, changePoints }
+    return {
+      account, monthsWritten: written.length,
+      discovery: { currentGap, currentGapText: formatDollars(currentGap), nonZeroSince, sinceAtLeast, summary },
+      changePoints,
+    }
   }
 
   async recordMonthClose(record: Omit<MonthCloseRecord, 'id' | 'recordedAt'>): Promise<MonthCloseRecord> {

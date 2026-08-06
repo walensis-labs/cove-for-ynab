@@ -35,19 +35,24 @@ describe('monthClose', () => {
     expect(txnCall[1].query).toEqual({ since_date: '2026-04-02' })
     const card = res.perCard[0]!
     // workingAsOf = -3291760 - (-50000) = -3241760 → -3241.76
-    expect(card).toMatchObject({ account: 'Citi Card', workingAsOf: -3241.76, availableAtMonthEnd: 2662.65, paymentCategoryId: 'p1' })
+    expect(card).toMatchObject({
+      account: 'Citi Card', workingAsOf: -3241.76, workingAsOfText: '-$3,241.76',
+      availableAtMonthEnd: 2662.65, availableAtMonthEndText: '$2,662.65', paymentCategoryId: 'p1',
+    })
     expect(card.gap).toBe(-579.11) // -3241.76 + 2662.65 — integer milli math, exact
+    expect(card.gapText).toBe('-$579.11')
     expect(res.blockers.unapproved.map((t) => t.id)).toEqual(['pend'])
+    expect(res.blockers.unapproved[0]).toMatchObject({ amount: -42.1, amountText: '-$42.10' })
     expect(res.blockers.uncategorized.map((t) => t.id)).toEqual(['pend'])
-    expect(res.redCategories).toEqual([{ id: 'r1', name: 'Kid Things', available: -348.17, group: 'Just for Fun' }])
-    expect(res.donors[0]).toMatchObject({ id: 'd1', excess: 412, hasTarget: false })
+    expect(res.redCategories).toEqual([{ id: 'r1', name: 'Kid Things', available: -348.17, availableText: '-$348.17', group: 'Just for Fun' }])
+    expect(res.donors[0]).toMatchObject({ id: 'd1', excess: 412, excessText: '$412.00', hasTarget: false })
     expect(res.gapStatus).toBe('provisional') // the 'pend' txn is unapproved+uncategorized+uncleared before cutoff
     expect(res.blockerCount).toBe(3)
   })
   it('cutoff=today identity: workingAsOf equals current balance when nothing post-dates it', async () => {
     const y = new Ynab({ client: client(), allowWrites: false })
     const res = await y.monthClose('last-used', { cutoff: '2026-08-31' })
-    expect(res.perCard[0]).toMatchObject({ workingAsOf: -3291.76, clearedAsOf: -3291.76 })
+    expect(res.perCard[0]).toMatchObject({ workingAsOf: -3291.76, clearedAsOf: -3291.76, clearedAsOfText: '-$3,291.76' })
     // 'pend' (2026-07-20) still predates this cutoff too, so the shared fixture is not "clean" here —
     // gapStatus is legitimately 'provisional', consistent with the first test. See the dedicated
     // final/blockerCount:0 test below for the clean-fixture case.
@@ -92,8 +97,26 @@ describe('proposeCoverage', () => {
     const y = new Ynab({ client: client(), allowWrites: false })
     const res = await y.proposeCoverage('last-used', { cutoff: '2026-07-31' })
     expect(res.month).toBe('2026-07-01')
-    expect(res.moves).toEqual([{ from: 'Dining Out', fromId: 'd1', to: 'Kid Things', toId: 'r1', amount: 348.17, source: 'category' }])
+    expect(res.moves).toEqual([{ from: 'Dining Out', fromId: 'd1', to: 'Kid Things', toId: 'r1', amount: 348.17, amountText: '$348.17', source: 'category' }])
     expect(res.rtaUsed).toBe(0)
+    expect(res.rtaUsedText).toBe('$0.00')
     expect(res.rtaRemaining).toBe(7178.05)
+    expect(res.rtaRemainingText).toBe('$7,178.05')
+  })
+
+  it('unfundable reds carry a needed amount companion too', async () => {
+    // No donors, no RTA — the red can't be covered at all, exercising proposeCoverage's `unfundable` branch.
+    const noRtaMonth = { month: { month: '2026-07-01', to_be_budgeted: 0, categories: [
+      { id: 'r1', name: 'Kid Things', category_group_name: 'Just for Fun', hidden: false, deleted: false, internal: false, balance: -348170, goal_type: null, goal_target: null },
+    ] } }
+    const c = { request: vi.fn(async (path: string) => {
+      if (path.endsWith('/accounts')) return { accounts: [] }
+      if (path.includes('/months/')) return noRtaMonth
+      if (path.endsWith('/transactions')) return { transactions: [] }
+      throw new Error(`unmocked ${path}`)
+    }) } as any
+    const y = new Ynab({ client: c, allowWrites: false })
+    const res = await y.proposeCoverage('last-used', { cutoff: '2026-07-31' })
+    expect(res.unfundable).toEqual([{ id: 'r1', name: 'Kid Things', needed: 348.17, neededText: '$348.17' }])
   })
 })

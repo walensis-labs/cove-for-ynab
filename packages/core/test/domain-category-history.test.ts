@@ -41,8 +41,8 @@ describe('getCategoryHistory', () => {
     expect(res.category).toEqual({ id: 'c1', name: 'Citi Card' })
     expect(res.skippedMonths).toEqual(['2026-05'])
     expect(res.points).toEqual([
-      { month: '2026-06', assigned: 100, activity: -50, available: 500 },
-      { month: '2026-07', assigned: 100, activity: -50, available: 700 },
+      { month: '2026-06', assigned: 100, assignedText: '$100.00', activity: -50, activityText: '-$50.00', available: 500, availableText: '$500.00' },
+      { month: '2026-07', assigned: 100, assignedText: '$100.00', activity: -50, activityText: '-$50.00', available: 700, availableText: '$700.00' },
     ])
     expect(c.request).toHaveBeenCalledTimes(3)
   })
@@ -71,9 +71,9 @@ describe('getCreditCardFloatHistory', () => {
     expect(res.account).toBe('Citi Card')
     expect(res.skippedMonths).toEqual([])
     expect(res.points).toEqual([
-      { month: '2026-06', owed: 500, available: 500, gap: 0, changed: false, gapChange: 0, direction: 'flat' },
-      { month: '2026-07', owed: 700, available: 500, gap: -200, changed: true, gapChange: -200, direction: 'grew', cause: 'uncovered_spending', evidence: { components: [{ cause: 'uncovered_spending', amount: -200, residual: -200 }] } },
-      { month: '2026-08', owed: 1000, available: 1000, gap: 0, changed: true, gapChange: 200, direction: 'shrank', cause: 'deliberate_cover', evidence: { components: [{ cause: 'deliberate_cover', amount: 250, assigned: 250 }, { cause: 'uncovered_spending', amount: -50, residual: -50 }] } },
+      { month: '2026-06', owed: 500, owedText: '$500.00', available: 500, availableText: '$500.00', gap: 0, gapText: '$0.00', changed: false, gapChange: 0, gapChangeText: '$0.00', direction: 'flat' },
+      { month: '2026-07', owed: 700, owedText: '$700.00', available: 500, availableText: '$500.00', gap: -200, gapText: '-$200.00', changed: true, gapChange: -200, gapChangeText: '-$200.00', direction: 'grew', cause: 'uncovered_spending', evidence: { components: [{ cause: 'uncovered_spending', amount: -200, amountText: '-$200.00', residual: -200, residualText: '-$200.00' }] } },
+      { month: '2026-08', owed: 1000, owedText: '$1,000.00', available: 1000, availableText: '$1,000.00', gap: 0, gapText: '$0.00', changed: true, gapChange: 200, gapChangeText: '$200.00', direction: 'shrank', cause: 'deliberate_cover', evidence: { components: [{ cause: 'deliberate_cover', amount: 250, amountText: '$250.00', assigned: 250, assignedText: '$250.00' }, { cause: 'uncovered_spending', amount: -50, amountText: '-$50.00', residual: -50, residualText: '-$50.00' }] } },
     ])
     expect(res.points.map((p: any) => p.direction)).toEqual(['flat', 'grew', 'shrank'])
     const txnCall = c.request.mock.calls.find(([p]: any[]) => String(p).endsWith('/accounts/a1/transactions'))!
@@ -81,12 +81,12 @@ describe('getCreditCardFloatHistory', () => {
 
     const grew = res.points.find((p: any) => p.month === '2026-07')!
     expect(grew.cause).toBe('uncovered_spending')
-    expect(grew.evidence!.components[0]).toMatchObject({ cause: 'uncovered_spending', amount: -200 })
+    expect(grew.evidence!.components[0]).toMatchObject({ cause: 'uncovered_spending', amount: -200, amountText: '-$200.00' })
     const shrank = res.points.find((p: any) => p.month === '2026-08')!
     expect(shrank.cause).toBe('deliberate_cover')
     expect(shrank.evidence!.components).toEqual([
-      { cause: 'deliberate_cover', amount: 250, assigned: 250 },
-      { cause: 'uncovered_spending', amount: -50, residual: -50 },
+      { cause: 'deliberate_cover', amount: 250, amountText: '$250.00', assigned: 250, assignedText: '$250.00' },
+      { cause: 'uncovered_spending', amount: -50, amountText: '-$50.00', residual: -50, residualText: '-$50.00' },
     ])
     expect(res.points.find((p: any) => p.month === '2026-06')!.cause).toBeUndefined()
   })
@@ -165,6 +165,7 @@ describe('backfillLedger', () => {
     expect(res.account).toBe('Citi Card')
     expect(res.monthsWritten).toBe(3)
     expect(res.discovery.currentGap).toBe(0)
+    expect(res.discovery.currentGapText).toBe('$0.00')
     expect(res.discovery.nonZeroSince).toBeNull()
     expect(res.discovery.sinceAtLeast).toBe(false)
     expect(res.discovery.summary).toBe(`Card is covered as of ${M1}.`)
@@ -179,11 +180,13 @@ describe('backfillLedger', () => {
       expect(r.blockers).toEqual({ unapproved: 0, uncategorized: 0, unclearedBeforeCutoff: 0 })
       expect(r.perCard[0]!.account).toBe('Citi Card')
       expect(r.perCard[0]!.clearedAsOf).toBe(r.perCard[0]!.workingAsOf)
+      expect(r.perCard[0]!.clearedAsOfText).toBe(r.perCard[0]!.workingAsOfText)
     }
     const close = ledger.list().find((r) => r.cutoff === lastDayOfIso(M2))!
     // M2: owed 700, so workingAsOf = −owed = −700
     expect(close.perCard[0]!.workingAsOf).toBe(-700)
-    expect(close.causes).toEqual([{ month: M2, change: -200, cause: 'uncovered_spending' }])
+    expect(close.perCard[0]!.workingAsOfText).toBe('-$700.00')
+    expect(close.causes).toEqual([{ month: M2, change: -200, changeText: '-$200.00', cause: 'uncovered_spending' }])
   })
 
   it('re-running replaces only the prior backfill records for the same card', async () => {
@@ -199,6 +202,7 @@ describe('backfillLedger', () => {
     const y = new Ynab({ client: neverCoveredFloatClient(), allowWrites: false, ledger })
     const res = await y.backfillLedger('last-used', { paymentCategoryId: 'p1', cardAccountId: 'a1', sinceMonth: M3, untilMonth: M1 })
     expect(res.discovery.currentGap).toBe(-1000)
+    expect(res.discovery.currentGapText).toBe('-$1,000.00')
     expect(res.discovery.nonZeroSince).toBe(M3)
     expect(res.discovery.sinceAtLeast).toBe(true)
     expect(res.discovery.summary).toBe(`You've been carrying $1,000.00 of float since at least ${M3}.`)
@@ -210,6 +214,7 @@ describe('backfillLedger', () => {
     const y = new Ynab({ client: surplusFloatClient(), allowWrites: false, ledger })
     const res = await y.backfillLedger('last-used', { paymentCategoryId: 'p1', cardAccountId: 'a1', sinceMonth: M3, untilMonth: M1 })
     expect(res.discovery.currentGap).toBe(300)
+    expect(res.discovery.currentGapText).toBe('$300.00')
     expect(res.discovery.nonZeroSince).toBe(M3)
     expect(res.discovery.sinceAtLeast).toBe(true)
     expect(res.discovery.summary).toBe(`Your payment category has run a $300.00 surplus since at least ${M3}.`)

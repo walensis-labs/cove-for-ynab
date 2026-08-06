@@ -5,10 +5,18 @@ import { randomUUID } from 'node:crypto'
 export interface MonthCloseRecord {
   id: string; recordedAt: string
   planId: string; cutoff: string; gapStatus: 'provisional' | 'final'
-  perCard: { account: string; workingAsOf: number; clearedAsOf: number; availableAtMonthEnd: number; gap: number }[]
+  // *Text companions are additive and optional: records written before Truthful Tool Output Task 1
+  // (or supplied by a caller that hasn't picked up the new core version) won't carry them.
+  perCard: {
+    account: string
+    workingAsOf: number; workingAsOfText?: string
+    clearedAsOf: number; clearedAsOfText?: string
+    availableAtMonthEnd: number; availableAtMonthEndText?: string
+    gap: number; gapText?: string
+  }[]
   blockers: { unapproved: number; uncategorized: number; unclearedBeforeCutoff: number }
-  causes?: { month: string; change: number; cause: string; narrative?: string }[]
-  moves?: { from: string; to: string; amount: number; source: 'category' | 'rta'; reason?: string }[]
+  causes?: { month: string; change: number; changeText?: string; cause: string; narrative?: string }[]
+  moves?: { from: string; to: string; amount: number; amountText?: string; source: 'category' | 'rta'; reason?: string }[]
   buffer?: number; note?: string
   kind?: 'close' | 'backfill' // absent = 'close' (pre-Phase-1a records predate this field)
 }
