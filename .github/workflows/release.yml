@@ -1,6 +1,12 @@
 name: Release
 on:
   push: { branches: [main] }
+  # Manual trigger. A push-only workflow has no recovery path when GitHub drops the run —
+  # during the 2026-08-06 Actions outage the merge to main never produced a Release run, and
+  # re-dispatching was impossible without manufacturing another commit. Safe to run by hand:
+  # changesets/action is idempotent, opening or updating the version PR when changesets exist
+  # and publishing only versions not already on npm.
+  workflow_dispatch:
 concurrency: release-${{ github.ref }}
 permissions: { contents: write, pull-requests: write, id-token: write }
 jobs:

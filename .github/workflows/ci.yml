@@ -2,6 +2,8 @@ name: CI
 on:
   push: { branches: [main] }
   pull_request:
+  # Same reason as release.yml — lets a dropped run be re-triggered without a new commit.
+  workflow_dispatch:
 jobs:
   test:
     runs-on: ubuntu-latest
