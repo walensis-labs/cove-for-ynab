@@ -60,8 +60,13 @@ describe('moveMoney confirmation gate', () => {
 
   it('succeeds when confirm: true is passed', async () => {
     const y = new Ynab({ client: client(), allowWrites: true })
-    const res = await y.moveMoney('p1', '2026-07-01', 'c-from', 'c-to', 100, undefined, { confirm: true })
+    const res: any = await y.moveMoney('p1', '2026-07-01', 'c-from', 'c-to', 100, undefined, { confirm: true })
     expect(res.moved).toBe(100)
+    expect(res.movedText).toBe('$100.00')
+    expect(res.from.assigned).toBe(400) // 500 - 100
+    expect(res.from.assignedText).toBe('$400.00')
+    expect(res.to.assigned).toBe(600) // 500 + 100
+    expect(res.to.assignedText).toBe('$600.00')
   })
 })
 
@@ -80,8 +85,9 @@ describe('assignBudget confirmation gate', () => {
 
   it('succeeds when confirm: true is passed', async () => {
     const y = new Ynab({ client: client(), allowWrites: true })
-    const res = await y.assignBudget('p1', '2026-07-01', 'c1', 250, undefined, { confirm: true })
+    const res: any = await y.assignBudget('p1', '2026-07-01', 'c1', 250, undefined, { confirm: true })
     expect(res.assigned).toBe(250)
+    expect(res.assignedText).toBe('$250.00')
   })
 })
 

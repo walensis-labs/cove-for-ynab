@@ -1,4 +1,5 @@
 import type { Txn } from './types.js'
+import { formatDollars } from './money.js'
 
 export const TXN_FIELD_ALIASES: Record<string, string> = {
   payee_name: 'payeeName', payee_id: 'payeeId', category_name: 'categoryName', category_id: 'categoryId',
@@ -33,7 +34,7 @@ export function applyFilters(txns: Txn[], f: TxnFilters): Txn[] {
   })
 }
 
-export function aggregateTxns(txns: Txn[], by: 'category' | 'payee' | 'month'): { key: string; total: number; count: number }[] {
+export function aggregateTxns(txns: Txn[], by: 'category' | 'payee' | 'month'): { key: string; total: number; totalText: string; count: number }[] {
   const groups = new Map<string, { total: number; count: number }>()
   for (const t of txns) {
     const key = by === 'month' ? t.date.slice(0, 7) : (by === 'category' ? t.categoryName : t.payeeName) ?? '(none)'
@@ -42,6 +43,6 @@ export function aggregateTxns(txns: Txn[], by: 'category' | 'payee' | 'month'): 
     g.count++
     groups.set(key, g)
   }
-  const rows = [...groups.entries()].map(([key, v]) => ({ key, ...v }))
+  const rows = [...groups.entries()].map(([key, v]) => ({ key, total: v.total, totalText: formatDollars(v.total), count: v.count }))
   return by === 'month' ? rows.sort((a, b) => a.key.localeCompare(b.key)) : rows.sort((a, b) => a.total - b.total)
 }

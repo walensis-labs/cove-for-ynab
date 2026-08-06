@@ -22,4 +22,13 @@ describe('money', () => {
     expect(formatDollars(-3.211, { decimals: 2 })).toBe('-$3.21')
     expect(formatDollars(10, { symbol: '€' })).toBe('€10.00')
   })
+  it('MINOR 6: drops a misleading negative sign once rounding erases the sub-cent amount', () => {
+    expect(formatDollars(-0.001)).toBe('$0.00')
+    expect(formatDollars(-0.0049)).toBe('$0.00')
+    // still negative once it rounds to a nonzero cent
+    expect(formatDollars(-0.006)).toBe('-$0.01')
+  })
+  it('MINOR 6: throws rather than emit a plausible-looking "$NaN"', () => {
+    expect(() => formatDollars(NaN)).toThrow(/NaN/)
+  })
 })

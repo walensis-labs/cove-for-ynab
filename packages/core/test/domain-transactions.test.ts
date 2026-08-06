@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Ynab, ConfirmationRequiredError, WriteDisabledError } from '../src/domain.js'
+import { Ynab, ConfirmationRequiredError, WriteDisabledError, mapTxn } from '../src/domain.js'
 import { UndoJournal } from '../src/undo-journal.js'
 
 /**
@@ -23,6 +23,48 @@ const apiTxn = (o: any = {}) => ({
 let journal: UndoJournal
 beforeEach(() => { journal = new UndoJournal(join(mkdtempSync(join(tmpdir(), 'u-')), 'undo.json')) })
 
+// Truthful Tool Output, Task 1: the production incident this pins — the model was shown a bare
+// `-1000` next to a raw milliunit `-1000000` in importId and "corrected" a correct −$1,000.00 read
+// down to −$1.00 and −$10.00 across a conversation. `amountText` removes the ambiguity: the model
+// quotes the formatted string instead of re-deriving units from a bare number.
+describe('mapTxn amountText (truthful output)', () => {
+  it('the exact production case: raw -1000000 milliunits renders amount -1000 with amountText -$1,000.00', () => {
+    const t = mapTxn(apiTxn({ amount: -1000000 }))
+    expect(t.amount).toBe(-1000)
+    expect(t.amountText).toBe('-$1,000.00')
+  })
+  it('the boundary the model got wrong: raw -1000 milliunits renders amount -1 with amountText -$1.00 (not -$0.01, not -$1,000.00)', () => {
+    const t = mapTxn(apiTxn({ amount: -1000 }))
+    expect(t.amount).toBe(-1)
+    expect(t.amountText).toBe('-$1.00')
+    expect(t.amountText).not.toBe('-$0.01')
+    expect(t.amountText).not.toBe('-$1,000.00')
+  })
+  it('zero renders $0.00', () => {
+    const t = mapTxn(apiTxn({ amount: 0 }))
+    expect(t.amount).toBe(0)
+    expect(t.amountText).toBe('$0.00')
+  })
+  it('positive amounts render without a leading minus', () => {
+    const t = mapTxn(apiTxn({ amount: 250000 }))
+    expect(t.amount).toBe(250)
+    expect(t.amountText).toBe('$250.00')
+  })
+  it('subtransactions each carry their own amountText', () => {
+    const t = mapTxn(apiTxn({
+      amount: -75000,
+      subtransactions: [
+        { amount: -50000, category_name: 'Groceries', memo: null, deleted: false },
+        { amount: -25000, category_name: 'Fun', memo: null, deleted: false },
+      ],
+    }))
+    expect(t.subtransactions).toEqual([
+      { amount: -50, amountText: '-$50.00', categoryName: 'Groceries', memo: null },
+      { amount: -25, amountText: '-$25.00', categoryName: 'Fun', memo: null },
+    ])
+  })
+})
+
 describe('listTransactions', () => {
   it('states the effective 1-year window and paginates', async () => {
     const client = { request: vi.fn(async () => ({ transactions: [apiTxn(), apiTxn({ id: 't2', amount: -1000 })], server_knowledge: 5 })) } as any
@@ -32,6 +74,7 @@ describe('listTransactions', () => {
     expect(res.total).toBe(2)
     expect(res.transactions).toHaveLength(1)
     expect(res.transactions[0].amount).toBe(-45.5)
+    expect(res.transactions[0].amountText).toBe('-$45.50')
   })
   it('uses the category sub-endpoint when only categoryId is set', async () => {
     const client = { request: vi.fn(async (path: string) => { expect(path).toBe('/plans/p1/categories/c9/transactions'); return { transactions: [] } }) } as any
@@ -55,8 +98,8 @@ describe('listTransactions', () => {
     const client = { request: vi.fn(async () => ({ transactions: [apiTxn(), apiTxn({ id: 't2', category_name: 'Fun', amount: -2000 })] })) } as any
     const res: any = await new Ynab({ client, allowWrites: false }).listTransactions('p1', { aggregate: 'category' })
     expect(res.aggregate).toEqual([
-      { key: 'Groceries', total: -45.5, count: 1 },
-      { key: 'Fun', total: -2, count: 1 },
+      { key: 'Groceries', total: -45.5, totalText: '-$45.50', count: 1 },
+      { key: 'Fun', total: -2, totalText: '-$2.00', count: 1 },
     ])
     expect(res.transactions).toBeUndefined()
   })
@@ -64,8 +107,26 @@ describe('listTransactions', () => {
     const client = { request: vi.fn(async () => ({ transactions: [apiTxn({ transfer_account_id: null })] })) } as any
     const y = new Ynab({ client, allowWrites: false })
     const res: any = await y.listTransactions('p1', { fields: ['payee_name', 'transfer_account_id', 'amount'] as any })
-    expect(res.transactions[0]).toEqual({ payee_name: 'Kroger', transfer_account_id: null, amount: -45.5 })
+    // MINOR 4: `fields: ['amount']` must still carry its formatted companion — a projection shouldn't be
+    // able to strip a money field down to a bare number when the unprojected row always has amountText.
+    expect(res.transactions[0]).toEqual({ payee_name: 'Kroger', transfer_account_id: null, amount: -45.5, amountText: '-$45.50' })
     expect(JSON.stringify(res.transactions[0])).toContain('transfer_account_id')
+  })
+  // Truthful Tool Output, Task 3(b): importId passes YNAB's raw milliunits straight through
+  // (`YNAB:-1000000:2026-08-06:1`) and sitting that bare string beside a correctly-converted `amount`
+  // is exactly what triggered the recompute spiral pinned in Task 1's tests above. It answers no user
+  // question by default, so it leaves the default projection — but must stay reachable for anyone who
+  // explicitly asks for it via `fields`.
+  it('drops importId from the default (no fields) projection but returns it via explicit fields', async () => {
+    const client = { request: vi.fn(async () => ({ transactions: [apiTxn({ import_id: 'YNAB:-1000000:2026-08-06:1' })] })) } as any
+    const y = new Ynab({ client, allowWrites: false })
+    const defaultRes: any = await y.listTransactions('p1', {})
+    expect(defaultRes.transactions[0]).not.toHaveProperty('importId')
+    // Rest of the row is untouched — this isn't a narrower default field set, just importId's absence.
+    expect(defaultRes.transactions[0].amount).toBe(-45.5)
+    expect(defaultRes.transactions[0].amountText).toBe('-$45.50')
+    const explicitRes: any = await y.listTransactions('p1', { fields: ['import_id'] as any })
+    expect(explicitRes.transactions[0]).toEqual({ import_id: 'YNAB:-1000000:2026-08-06:1' })
   })
 })
 

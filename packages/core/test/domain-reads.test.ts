@@ -27,15 +27,22 @@ describe('Ynab reads', () => {
     const client = fakeClient({ '/plans': () => ({ plans: [{ id: 'p1', name: 'Family', last_modified_on: '2026-07-01T00:00:00Z', currency_format: { iso_code: 'USD' } }] }) })
     const y = new Ynab({ client, allowWrites: false })
     const plans = await y.listPlans()
-    expect(plans).toEqual([{ id: 'p1', name: 'Family', currency: 'USD', lastModified: '2026-07-01T00:00:00Z' }])
+    expect(plans).toEqual([{ id: 'p1', name: 'Family', currency: 'USD', currencySymbol: '$', lastModified: '2026-07-01T00:00:00Z' }])
   })
   it('getMonth converts milliunits to dollars everywhere', async () => {
     const client = fakeClient({ '/plans/p1/months/2026-07-01': () => monthFixture })
     const y = new Ynab({ client, allowWrites: false })
     const m = await y.getMonth('p1', '2026-07-01')
     expect(m.readyToAssign).toBe(150.25)
-    expect(m.categories[1]).toMatchObject({ name: 'Dining', assigned: 200, activity: -155.5, available: 44.5, goalTarget: null })
+    // IMPORTANT 2: get_month is the tool the month-close playbook actually reads readyToAssign from
+    // (routing straight into assign_budget) — it needs a companion just like getPlanOverview's does.
+    expect(m.readyToAssignText).toBe('$150.25')
+    expect(m.categories[1]).toMatchObject({
+      name: 'Dining', assigned: 200, assignedText: '$200.00', activity: -155.5, activityText: '-$155.50',
+      available: 44.5, availableText: '$44.50', goalTarget: null, goalTargetText: null,
+    })
     expect(m.categories[0]!.goalTarget).toBe(1500)
+    expect(m.categories[0]!.goalTargetText).toBe('$1,500.00')
   })
   it('listPayees uses delta cache on second call', async () => {
     const calls: any[] = []
@@ -96,15 +103,46 @@ describe('Ynab reads', () => {
     const overview = await y.getPlanOverview('p1')
     expect(overview.plan).toEqual({ id: 'p1', name: 'Family', currency: 'USD' })
     expect(overview.accounts).toEqual([
-      { id: 'a1', name: 'Checking', type: 'checking', onBudget: true, balance: 1234.56, cleared: 1000, uncleared: 234.56, lastReconciledAt: null },
+      {
+        id: 'a1', name: 'Checking', type: 'checking', onBudget: true,
+        balance: 1234.56, balanceText: '$1,234.56', cleared: 1000, clearedText: '$1,000.00',
+        uncleared: 234.56, unclearedText: '$234.56', lastReconciledAt: null,
+      },
     ])
     expect(overview.month.readyToAssign).toBe(150.25)
+    expect(overview.month.readyToAssignText).toBe('$150.25')
     expect(overview.month.budgeted).toBe(1700)
+    expect(overview.month.budgetedText).toBe('$1,700.00')
     expect(overview.month.activity).toBe(-1655.5)
+    expect(overview.month.activityText).toBe('-$1,655.50')
     expect(overview.categoryGroups).toEqual([
-      { name: 'Bills', assigned: 1500, activity: -1500, available: 0 },
-      { name: 'Fun', assigned: 200, activity: -155.5, available: 44.5 },
+      { name: 'Bills', assigned: 1500, assignedText: '$1,500.00', activity: -1500, activityText: '-$1,500.00', available: 0, availableText: '$0.00' },
+      { name: 'Fun', assigned: 200, assignedText: '$200.00', activity: -155.5, activityText: '-$155.50', available: 44.5, availableText: '$44.50' },
     ])
+  })
+  // NOTE 7 (truthful-output review): getPlanOverview already has the plan's real currency in hand —
+  // a EUR budget must not get a confident, wrong "$" in a field we're telling the model to quote
+  // verbatim. That's worse than a bare number, because the wrong symbol looks authoritative.
+  it('getPlanOverview uses the plan\'s real currency symbol, not a hardcoded "$"', async () => {
+    const client = fakeClient({
+      '/plans': () => ({ plans: [{ id: 'p1', name: 'EU Budget', last_modified_on: '2026-07-01T00:00:00Z', currency_format: { iso_code: 'EUR', currency_symbol: '€' } }] }),
+      '/plans/p1/accounts': () => ({
+        accounts: [
+          { id: 'a1', name: 'Checking', type: 'checking', on_budget: true, balance: 1234560, cleared_balance: 1000000, uncleared_balance: 234560, last_reconciled_at: null, deleted: false, closed: false },
+        ],
+      }),
+      '/plans/p1/months/current': () => monthFixture,
+    })
+    const y = new Ynab({ client, allowWrites: false })
+    const overview = await y.getPlanOverview('p1')
+    expect(overview.plan.currency).toBe('EUR')
+    expect(overview.month.readyToAssignText).toBe('€150.25')
+    expect(overview.month.budgetedText).toBe('€1,700.00')
+    expect(overview.month.activityText).toBe('-€1,655.50')
+    expect(overview.accounts[0]!.balanceText).toBe('€1,234.56')
+    expect(overview.accounts[0]!.clearedText).toBe('€1,000.00')
+    expect(overview.accounts[0]!.unclearedText).toBe('€234.56')
+    expect(overview.categoryGroups[0]!.assignedText).toBe('€1,500.00')
   })
   it('listScheduled converts amounts and excludes deleted', async () => {
     const client = fakeClient({
@@ -118,7 +156,7 @@ describe('Ynab reads', () => {
     const y = new Ynab({ client, allowWrites: false })
     const scheduled = await y.listScheduled('p1')
     expect(scheduled).toEqual([
-      { id: 's1', dateNext: '2026-08-01', frequency: 'monthly', amount: -45.5, payeeName: 'Landlord', categoryName: 'Rent', memo: 'August rent' },
+      { id: 's1', dateNext: '2026-08-01', frequency: 'monthly', amount: -45.5, amountText: '-$45.50', payeeName: 'Landlord', categoryName: 'Rent', memo: 'August rent' },
     ])
   })
 })

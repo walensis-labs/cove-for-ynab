@@ -1,5 +1,6 @@
 import type { Txn, CategorySnapshot } from './types.js'
 import { aggregateTxns } from './filters.js'
+import { formatDollars } from './money.js'
 
 const r2 = (n: number) => Math.round(n * 100) / 100
 
@@ -10,7 +11,7 @@ export function spendingSummary(txns: Txn[], opts: { by: 'category' | 'payee'; c
   return cur.map((row) => {
     const prevTotal = prev.get(row.key)
     return {
-      ...row, prevTotal,
+      ...row, prevTotal, ...(prevTotal !== undefined ? { prevTotalText: formatDollars(prevTotal) } : {}),
       changePct: prevTotal === undefined || prevTotal === 0 ? null : r2(((Math.abs(row.total) - Math.abs(prevTotal)) / Math.abs(prevTotal)) * 100),
     }
   })
@@ -19,15 +20,15 @@ export function spendingSummary(txns: Txn[], opts: { by: 'category' | 'payee'; c
 export function budgetHealth(input: { readyToAssign: number; categories: CategorySnapshot[]; accounts: { name: string; type: string; balance: number }[] }) {
   const visible = input.categories.filter((c) => !c.hidden)
   return {
-    readyToAssign: input.readyToAssign,
-    overspent: visible.filter((c) => c.available < 0).map((c) => ({ name: c.name, available: c.available })),
-    underfunded: visible.filter((c) => (c.goalUnderFunded ?? 0) > 0).map((c) => ({ name: c.name, goalUnderFunded: c.goalUnderFunded! })),
+    readyToAssign: input.readyToAssign, readyToAssignText: formatDollars(input.readyToAssign),
+    overspent: visible.filter((c) => c.available < 0).map((c) => ({ name: c.name, available: c.available, availableText: formatDollars(c.available) })),
+    underfunded: visible.filter((c) => (c.goalUnderFunded ?? 0) > 0).map((c) => ({ name: c.name, goalUnderFunded: c.goalUnderFunded!, goalUnderFundedText: formatDollars(c.goalUnderFunded!) })),
     creditCardStatus: input.accounts
       .filter((a) => a.type === 'creditCard' && a.balance < 0)
       .map((a) => {
         const pay = visible.find((c) => c.name === a.name)
         const paymentAvailable = pay?.available ?? 0
-        return { account: a.name, owed: a.balance, paymentAvailable, covered: paymentAvailable >= -a.balance }
+        return { account: a.name, owed: a.balance, owedText: formatDollars(a.balance), paymentAvailable, paymentAvailableText: formatDollars(paymentAvailable), covered: paymentAvailable >= -a.balance }
       }),
   }
 }
@@ -47,7 +48,7 @@ export function detectRecurring(txns: Txn[]) {
     if (!t.payeeName || t.amount >= 0 || t.transferAccountId) continue
     byPayee.set(t.payeeName, [...(byPayee.get(t.payeeName) ?? []), t])
   }
-  const out: { payee: string; cadence: 'weekly' | 'monthly' | 'yearly'; lastAmount: number; lastDate: string; occurrences: number; amountChanged: boolean }[] = []
+  const out: { payee: string; cadence: 'weekly' | 'monthly' | 'yearly'; lastAmount: number; lastAmountText: string; lastDate: string; occurrences: number; amountChanged: boolean }[] = []
   for (const [payee, list] of byPayee) {
     if (list.length < 3) continue
     const sorted = [...list].sort((a, b) => a.date.localeCompare(b.date))
@@ -55,7 +56,7 @@ export function detectRecurring(txns: Txn[]) {
     const cadence = cadenceOf(gaps)
     if (!cadence) continue
     const last = sorted[sorted.length - 1]!
-    out.push({ payee, cadence, lastAmount: last.amount, lastDate: last.date, occurrences: sorted.length, amountChanged: Math.abs(last.amount - sorted[0]!.amount) > 0.005 })
+    out.push({ payee, cadence, lastAmount: last.amount, lastAmountText: formatDollars(last.amount), lastDate: last.date, occurrences: sorted.length, amountChanged: Math.abs(last.amount - sorted[0]!.amount) > 0.005 })
   }
   return out.sort((a, b) => a.lastAmount - b.lastAmount)
 }
@@ -85,7 +86,10 @@ export function incomeVsExpense(txns: Txn[], todayIso: string) {
   }
   const currentMonth = todayIso.slice(0, 7)
   return [...months.entries()].sort(([a], [b]) => a.localeCompare(b))
-    .map(([month, v]) => ({ month, income: v.income, expense: v.expense, net: r2(v.income + v.expense), partial: month === currentMonth }))
+    .map(([month, v]) => {
+      const net = r2(v.income + v.expense)
+      return { month, income: v.income, incomeText: formatDollars(v.income), expense: v.expense, expenseText: formatDollars(v.expense), net, netText: formatDollars(net), partial: month === currentMonth }
+    })
 }
 
 export function netWorthHistory(txns: Txn[]) {
@@ -97,6 +101,6 @@ export function netWorthHistory(txns: Txn[]) {
   let acc = 0
   return [...monthly.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([month, delta]) => {
     acc = r2(acc + delta)
-    return { month, netWorth: acc }
+    return { month, netWorth: acc, netWorthText: formatDollars(acc) }
   })
 }

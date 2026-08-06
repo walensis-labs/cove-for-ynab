@@ -41,8 +41,8 @@ describe('getCategoryHistory', () => {
     expect(res.category).toEqual({ id: 'c1', name: 'Citi Card' })
     expect(res.skippedMonths).toEqual(['2026-05'])
     expect(res.points).toEqual([
-      { month: '2026-06', assigned: 100, activity: -50, available: 500 },
-      { month: '2026-07', assigned: 100, activity: -50, available: 700 },
+      { month: '2026-06', assigned: 100, assignedText: '$100.00', activity: -50, activityText: '-$50.00', available: 500, availableText: '$500.00' },
+      { month: '2026-07', assigned: 100, assignedText: '$100.00', activity: -50, activityText: '-$50.00', available: 700, availableText: '$700.00' },
     ])
     expect(c.request).toHaveBeenCalledTimes(3)
   })
@@ -71,9 +71,9 @@ describe('getCreditCardFloatHistory', () => {
     expect(res.account).toBe('Citi Card')
     expect(res.skippedMonths).toEqual([])
     expect(res.points).toEqual([
-      { month: '2026-06', owed: 500, available: 500, gap: 0, changed: false, gapChange: 0, direction: 'flat' },
-      { month: '2026-07', owed: 700, available: 500, gap: -200, changed: true, gapChange: -200, direction: 'grew', cause: 'uncovered_spending', evidence: { components: [{ cause: 'uncovered_spending', amount: -200, residual: -200 }] } },
-      { month: '2026-08', owed: 1000, available: 1000, gap: 0, changed: true, gapChange: 200, direction: 'shrank', cause: 'deliberate_cover', evidence: { components: [{ cause: 'deliberate_cover', amount: 250, assigned: 250 }, { cause: 'uncovered_spending', amount: -50, residual: -50 }] } },
+      { month: '2026-06', owed: 500, owedText: '$500.00', available: 500, availableText: '$500.00', gap: 0, gapText: '$0.00', changed: false, gapChange: 0, gapChangeText: '$0.00', direction: 'flat' },
+      { month: '2026-07', owed: 700, owedText: '$700.00', available: 500, availableText: '$500.00', gap: -200, gapText: '-$200.00', changed: true, gapChange: -200, gapChangeText: '-$200.00', direction: 'grew', cause: 'uncovered_spending', evidence: { components: [{ cause: 'uncovered_spending', amount: -200, amountText: '-$200.00', residual: -200, residualText: '-$200.00' }] } },
+      { month: '2026-08', owed: 1000, owedText: '$1,000.00', available: 1000, availableText: '$1,000.00', gap: 0, gapText: '$0.00', changed: true, gapChange: 200, gapChangeText: '$200.00', direction: 'shrank', cause: 'deliberate_cover', evidence: { components: [{ cause: 'deliberate_cover', amount: 250, amountText: '$250.00', assigned: 250, assignedText: '$250.00' }, { cause: 'uncovered_spending', amount: -50, amountText: '-$50.00', residual: -50, residualText: '-$50.00' }] } },
     ])
     expect(res.points.map((p: any) => p.direction)).toEqual(['flat', 'grew', 'shrank'])
     const txnCall = c.request.mock.calls.find(([p]: any[]) => String(p).endsWith('/accounts/a1/transactions'))!
@@ -81,12 +81,12 @@ describe('getCreditCardFloatHistory', () => {
 
     const grew = res.points.find((p: any) => p.month === '2026-07')!
     expect(grew.cause).toBe('uncovered_spending')
-    expect(grew.evidence!.components[0]).toMatchObject({ cause: 'uncovered_spending', amount: -200 })
+    expect(grew.evidence!.components[0]).toMatchObject({ cause: 'uncovered_spending', amount: -200, amountText: '-$200.00' })
     const shrank = res.points.find((p: any) => p.month === '2026-08')!
     expect(shrank.cause).toBe('deliberate_cover')
     expect(shrank.evidence!.components).toEqual([
-      { cause: 'deliberate_cover', amount: 250, assigned: 250 },
-      { cause: 'uncovered_spending', amount: -50, residual: -50 },
+      { cause: 'deliberate_cover', amount: 250, amountText: '$250.00', assigned: 250, assignedText: '$250.00' },
+      { cause: 'uncovered_spending', amount: -50, amountText: '-$50.00', residual: -50, residualText: '-$50.00' },
     ])
     expect(res.points.find((p: any) => p.month === '2026-06')!.cause).toBeUndefined()
   })
@@ -165,6 +165,7 @@ describe('backfillLedger', () => {
     expect(res.account).toBe('Citi Card')
     expect(res.monthsWritten).toBe(3)
     expect(res.discovery.currentGap).toBe(0)
+    expect(res.discovery.currentGapText).toBe('$0.00')
     expect(res.discovery.nonZeroSince).toBeNull()
     expect(res.discovery.sinceAtLeast).toBe(false)
     expect(res.discovery.summary).toBe(`Card is covered as of ${M1}.`)
@@ -179,11 +180,13 @@ describe('backfillLedger', () => {
       expect(r.blockers).toEqual({ unapproved: 0, uncategorized: 0, unclearedBeforeCutoff: 0 })
       expect(r.perCard[0]!.account).toBe('Citi Card')
       expect(r.perCard[0]!.clearedAsOf).toBe(r.perCard[0]!.workingAsOf)
+      expect(r.perCard[0]!.clearedAsOfText).toBe(r.perCard[0]!.workingAsOfText)
     }
     const close = ledger.list().find((r) => r.cutoff === lastDayOfIso(M2))!
     // M2: owed 700, so workingAsOf = −owed = −700
     expect(close.perCard[0]!.workingAsOf).toBe(-700)
-    expect(close.causes).toEqual([{ month: M2, change: -200, cause: 'uncovered_spending' }])
+    expect(close.perCard[0]!.workingAsOfText).toBe('-$700.00')
+    expect(close.causes).toEqual([{ month: M2, change: -200, changeText: '-$200.00', cause: 'uncovered_spending' }])
   })
 
   it('re-running replaces only the prior backfill records for the same card', async () => {
@@ -199,6 +202,7 @@ describe('backfillLedger', () => {
     const y = new Ynab({ client: neverCoveredFloatClient(), allowWrites: false, ledger })
     const res = await y.backfillLedger('last-used', { paymentCategoryId: 'p1', cardAccountId: 'a1', sinceMonth: M3, untilMonth: M1 })
     expect(res.discovery.currentGap).toBe(-1000)
+    expect(res.discovery.currentGapText).toBe('-$1,000.00')
     expect(res.discovery.nonZeroSince).toBe(M3)
     expect(res.discovery.sinceAtLeast).toBe(true)
     expect(res.discovery.summary).toBe(`You've been carrying $1,000.00 of float since at least ${M3}.`)
@@ -210,6 +214,7 @@ describe('backfillLedger', () => {
     const y = new Ynab({ client: surplusFloatClient(), allowWrites: false, ledger })
     const res = await y.backfillLedger('last-used', { paymentCategoryId: 'p1', cardAccountId: 'a1', sinceMonth: M3, untilMonth: M1 })
     expect(res.discovery.currentGap).toBe(300)
+    expect(res.discovery.currentGapText).toBe('$300.00')
     expect(res.discovery.nonZeroSince).toBe(M3)
     expect(res.discovery.sinceAtLeast).toBe(true)
     expect(res.discovery.summary).toBe(`Your payment category has run a $300.00 surplus since at least ${M3}.`)
@@ -242,6 +247,43 @@ describe('getMonthCloseLedger — kind filter passthrough', () => {
   })
 })
 
+// IMPORTANT 3: recordMonthClose (the kind:'close' write path) must populate the same *Text companions
+// backfillLedger already puts on kind:'backfill' rows — otherwise get_month_close_ledger can return a
+// single response mixing labeled and unlabeled money, which is worse than uniformly unlabeled.
+describe('recordMonthClose — money *Text companions on the close path', () => {
+  it('fills perCard, causes, moves, and buffer companions when the caller omits them', async () => {
+    const ledger = tempLedger()
+    const y = new Ynab({ client: { request: vi.fn() } as any, allowWrites: false, ledger })
+    await y.recordMonthClose({
+      planId: 'p1', cutoff: '2026-07-31', gapStatus: 'final',
+      perCard: [{ account: 'Citi', workingAsOf: -3241.76, clearedAsOf: -3241.76, availableAtMonthEnd: 2662.65, gap: -579.11 }],
+      blockers: { unapproved: 0, uncategorized: 0, unclearedBeforeCutoff: 0 },
+      causes: [{ month: '2026-07', change: -200, cause: 'uncovered_spending' }],
+      moves: [{ from: 'Dining Out', to: 'Kid Things', amount: 348.17, source: 'category' }],
+      buffer: 100,
+    })
+    const [record] = (await y.getMonthCloseLedger({ kind: 'close' })).records
+    expect(record!.perCard[0]).toMatchObject({
+      workingAsOfText: '-$3,241.76', clearedAsOfText: '-$3,241.76', availableAtMonthEndText: '$2,662.65', gapText: '-$579.11',
+    })
+    expect(record!.causes).toEqual([{ month: '2026-07', change: -200, changeText: '-$200.00', cause: 'uncovered_spending' }])
+    expect(record!.moves).toEqual([{ from: 'Dining Out', to: 'Kid Things', amount: 348.17, amountText: '$348.17', source: 'category' }])
+    expect(record!.buffer).toBe(100)
+    expect(record!.bufferText).toBe('$100.00')
+  })
+  it('never overwrites a caller-supplied *Text value', async () => {
+    const ledger = tempLedger()
+    const y = new Ynab({ client: { request: vi.fn() } as any, allowWrites: false, ledger })
+    await y.recordMonthClose({
+      planId: 'p1', cutoff: '2026-07-31', gapStatus: 'final',
+      perCard: [{ account: 'Citi', workingAsOf: -100, workingAsOfText: 'CUSTOM', clearedAsOf: -100, availableAtMonthEnd: 100, gap: 0 }],
+      blockers: { unapproved: 0, uncategorized: 0, unclearedBeforeCutoff: 0 },
+    })
+    const [record] = (await y.getMonthCloseLedger({ kind: 'close' })).records
+    expect(record!.perCard[0]!.workingAsOfText).toBe('CUSTOM')
+  })
+})
+
 // Task 1 (Phase 1b worker substrate): Ynab must accept ANY LedgerLike implementation — sync (LedgerStore)
 // or async (e.g. a future D1-backed worker ledger) — and await every call uniformly. This stub returns
 // Promises from all three methods to prove Ynab doesn't assume synchronous ledger access.
@@ -262,7 +304,14 @@ describe('Ynab + async LedgerLike (worker substrate)', () => {
   it('recordMonthClose awaits an async ledger and resolves the appended record', async () => {
     const y = new Ynab({ client: { request: vi.fn() } as any, allowWrites: false, ledger: asyncLedgerStub() })
     const result = await y.recordMonthClose(asyncStubRecord())
-    expect(result).toEqual({ ...asyncStubRecord(), id: 'x', recordedAt: 'now', kind: 'close' })
+    // IMPORTANT 3: recordMonthClose fills in the *Text companions (perCard's four fields here) before
+    // handing the record to ledger.append — so a 'close' row looks the same, money-labeling-wise, as a
+    // 'backfill' row in the same get_month_close_ledger response.
+    expect(result).toEqual({
+      ...asyncStubRecord(),
+      perCard: [{ account: 'Citi', workingAsOf: -100, workingAsOfText: '-$100.00', clearedAsOf: -100, clearedAsOfText: '-$100.00', availableAtMonthEnd: 100, availableAtMonthEndText: '$100.00', gap: 0, gapText: '$0.00' }],
+      id: 'x', recordedAt: 'now', kind: 'close',
+    })
   })
   it('getMonthCloseLedger awaits an async ledger and resolves its list', async () => {
     const y = new Ynab({ client: { request: vi.fn() } as any, allowWrites: false, ledger: asyncLedgerStub() })
