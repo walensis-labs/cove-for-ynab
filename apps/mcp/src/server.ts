@@ -44,6 +44,13 @@ function selectTools(writeTools: 'all' | 'none' | string[]): ToolDef[] {
 // buildYnab passes none, and undo_last is deliberately not registered there). Same failure class as the
 // writeDisabledHint fix: the library must not assert a deployment fact it can't know. Matches both
 // "Undoable." and "Undoable (restores from journal)." — always the trailing clause of the description.
+// MINOR 4 (truthful-output review): deliberately anchored to end-of-string ($) — this only strips a
+// TRAILING "Undoable(...)." clause. A future description that mentions "Undoable" mid-sentence would
+// sail through unstripped, but the whole-list assertion in test/server.test.ts ("a journal-less
+// buildServer produces no tool description containing 'Undoable', across the whole registered list")
+// scans every registered description unconditionally, so that case fails the test instead of shipping a
+// silent false claim. That test is the backstop holding this anchor up — don't loosen the regex (e.g.
+// drop the trailing $) without understanding you'd be removing the reason it's safe to keep it narrow.
 const UNDOABLE_CLAUSE = / Undoable(?: \([^)]*\))?\.$/
 
 function describeFor(def: ToolDef, hasJournal: boolean): string {

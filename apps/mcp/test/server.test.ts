@@ -226,22 +226,67 @@ describe('library entrypoint (src/index.ts)', () => {
 // Truthful Tool Output, Task 3(a): a real production exchange had the model report a −$1,000.00
 // transaction as −$10.00, then −$1.00, then finally the right answer — mapTxn converted correctly, but
 // list_transactions' description said nothing about units, so the model had no way to know the amount it
-// was looking at was already dollars. Enumerated explicitly (not a substring scan over `tools`) so a
-// newly added money-touching tool that forgets the unit statement fails this test, not silently ships.
-const MONEY_TOUCHING_TOOL_NAMES = [
-  'get_plan_overview', 'get_month', 'list_transactions', 'get_transaction', 'list_scheduled_transactions',
-  'list_categories', 'spending_summary', 'budget_health', 'detect_recurring_charges', 'income_vs_expense',
-  'net_worth_history', 'month_close', 'propose_coverage', 'get_category_history', 'credit_card_float_history',
-  'get_month_close_ledger',
+// was looking at was already dollars.
+//
+// Review fix (IMPORTANT 1): this used to be a hand-maintained array of 16 names, verified only against
+// itself — nothing forced it to stay in sync with the actual tool table, and `backfill_ledger` shipped
+// money-bearing output without ever being added to it. The list is now derived from `ToolDef.money`,
+// set at each tool's own definition in src/tools.ts (next to `write`, same pattern) — a marked tool
+// missing its unit statement fails the assertions below instead of shipping silently, and the
+// exhaustiveness check further down catches a tool that touches money but was never marked at all.
+const MONEY_TOUCHING_TOOL_NAMES = tools.filter((t) => t.money).map((t) => t.name).sort()
+
+// Full audit (IMPORTANT 1 — "audit all 35 tools... report the full classification"): every tool that is
+// NOT money-touching, hand-classified once here as the complement. Pins the classification itself — a
+// tool silently dropping out of the money bucket (e.g. someone removes `money: true` along with the
+// field that justified it, or a new tool #36 lands unclassified) shows up as a failing exhaustiveness
+// check below instead of just vanishing from MONEY_TOUCHING_TOOL_NAMES unnoticed.
+const NOT_MONEY_TOUCHING_TOOL_NAMES = [
+  'list_plans', 'delete_transaction', 'import_transactions', 'delete_scheduled_transaction',
+  'create_category', 'list_payees', 'rename_payee', 'create_payee', 'undo_last',
 ]
 
+describe('money classification covers all 35 tools exhaustively (truthful output task 3 review, IMPORTANT 1)', () => {
+  it('every tool falls into exactly one of the money / not-money buckets', () => {
+    const all = [...MONEY_TOUCHING_TOOL_NAMES, ...NOT_MONEY_TOUCHING_TOOL_NAMES]
+    expect(all.length, 'a tool name appears in both buckets, or the buckets overlap').toBe(new Set(all).size)
+    expect(all.length, 'buckets together must cover every tool in the table').toBe(tools.length)
+    for (const t of tools) expect(all, `${t.name} is not classified as money or not-money`).toContain(t.name)
+  })
+})
+
 describe('money-touching tool descriptions state the unit (truthful output task 3a)', () => {
-  it('every enumerated money-touching tool states decimal dollars and the *Text quoting convention', () => {
-    for (const name of MONEY_TOUCHING_TOOL_NAMES) {
-      const def = tools.find((t) => t.name === name)
-      expect(def, `tool ${name} not found in table`).toBeTruthy()
-      expect(def!.description, `${name}: description doesn't state "decimal dollars"`).toMatch(/decimal dollars/i)
-      expect(def!.description, `${name}: description doesn't mention the *Text companion convention`).toMatch(/\*Text/)
+  it('every money-touching non-write tool states decimal dollars and the *Text quoting convention', () => {
+    for (const def of tools.filter((t) => t.money && !t.write)) {
+      expect(def.description, `${def.name}: description doesn't state "decimal dollars"`).toMatch(/decimal dollars/i)
+      expect(def.description, `${def.name}: description doesn't mention the *Text companion convention`).toMatch(/\*Text/)
+    }
+  })
+
+  // Write tools document units per money field via the `dollars()` schema helper (already-reviewed,
+  // unchanged mechanism) rather than the *Text convention above, which describes read output. Walks each
+  // field's zod description through optional/nullable/array/object wrappers, since money fields
+  // typically sit nested inside array-of-object schemas (e.g. record_month_close's per_card rows) rather
+  // than at the schema's top level.
+  function collectDescriptions(field: any, seen = new Set<any>()): string[] {
+    if (!field || seen.has(field)) return []
+    seen.add(field)
+    const out: string[] = []
+    if (field.description) out.push(field.description)
+    const def = field._def
+    if (def?.innerType) out.push(...collectDescriptions(def.innerType, seen)) // optional / nullable / default
+    if (def?.type) out.push(...collectDescriptions(def.type, seen)) // array element
+    if (typeof def?.shape === 'function') {
+      for (const v of Object.values(def.shape())) out.push(...collectDescriptions(v, seen))
+    }
+    return out
+  }
+
+  it('every money-touching write tool documents units somewhere (schema field description or tool-description prose)', () => {
+    for (const def of tools.filter((t) => t.money && t.write)) {
+      const schemaDescriptions = Object.values(def.schema).flatMap((f) => collectDescriptions(f))
+      const haystack = [def.description, ...schemaDescriptions].join(' ')
+      expect(haystack, `${def.name}: no schema field or description text mentions units ("dollars")`).toMatch(/dollars/i)
     }
   })
 })
