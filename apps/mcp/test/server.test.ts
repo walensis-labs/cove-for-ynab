@@ -4,7 +4,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Ynab, RateLimiter, LedgerStore } from '@walensis/cove-core'
+import { Ynab, RateLimiter, LedgerStore, UndoJournal } from '@walensis/cove-core'
 import { buildServer } from '../src/server.js'
 import { resolveEnv, WRITE_DISABLED_HINT } from '../src/env.js'
 import { tools, buildServer as buildServerFromIndex } from '../src/index.js'
@@ -220,6 +220,56 @@ describe('library entrypoint (src/index.ts)', () => {
   it('re-exports the 35-tool table and buildServer', () => {
     expect(tools).toHaveLength(35)
     expect(typeof buildServerFromIndex).toBe('function')
+  })
+})
+
+// Truthful Tool Output, Task 3(a): a real production exchange had the model report a −$1,000.00
+// transaction as −$10.00, then −$1.00, then finally the right answer — mapTxn converted correctly, but
+// list_transactions' description said nothing about units, so the model had no way to know the amount it
+// was looking at was already dollars. Enumerated explicitly (not a substring scan over `tools`) so a
+// newly added money-touching tool that forgets the unit statement fails this test, not silently ships.
+const MONEY_TOUCHING_TOOL_NAMES = [
+  'get_plan_overview', 'get_month', 'list_transactions', 'get_transaction', 'list_scheduled_transactions',
+  'list_categories', 'spending_summary', 'budget_health', 'detect_recurring_charges', 'income_vs_expense',
+  'net_worth_history', 'month_close', 'propose_coverage', 'get_category_history', 'credit_card_float_history',
+  'get_month_close_ledger',
+]
+
+describe('money-touching tool descriptions state the unit (truthful output task 3a)', () => {
+  it('every enumerated money-touching tool states decimal dollars and the *Text quoting convention', () => {
+    for (const name of MONEY_TOUCHING_TOOL_NAMES) {
+      const def = tools.find((t) => t.name === name)
+      expect(def, `tool ${name} not found in table`).toBeTruthy()
+      expect(def!.description, `${name}: description doesn't state "decimal dollars"`).toMatch(/decimal dollars/i)
+      expect(def!.description, `${name}: description doesn't mention the *Text companion convention`).toMatch(/\*Text/)
+    }
+  })
+})
+
+// Truthful Tool Output, Task 3(c): five (now more) tool descriptions carry "Undoable.", but on the
+// hosted multi-tenant tier buildYnab passes no journal and undo_last isn't registered — a description
+// that still claims undoability is a static string in the library asserting a deployment fact it can't
+// know, the same failure class the writeDisabledHint fix closed. `Ynab.journal` is a public readonly
+// field (no core change needed here), so buildServer strips the claim at registration time when absent.
+describe('"Undoable." is conditional on an undo journal existing (truthful output task 3c)', () => {
+  it('a journal-less buildServer produces no tool description containing "Undoable", across the whole registered list', async () => {
+    const client = await connect(new Ynab({ client: { request: vi.fn() } as any, allowWrites: false }))
+    const { tools: registered } = await client.listTools()
+    expect(registered.length).toBeGreaterThan(0)
+    for (const t of registered) expect(t.description).not.toMatch(/Undoable/)
+  })
+
+  it('a journal-bearing buildServer produces descriptions identical to the source tool table (regression)', async () => {
+    const journalPath = join(mkdtempSync(join(tmpdir(), 'undo-')), 'undo.json')
+    const journal = new UndoJournal(journalPath)
+    const client = await connect(new Ynab({ client: { request: vi.fn() } as any, allowWrites: false, journal }))
+    const { tools: registered } = await client.listTools()
+    expect(registered.length).toBe(tools.length)
+    for (const t of registered) {
+      const def = tools.find((d) => d.name === t.name)
+      expect(def, `${t.name} missing from source table`).toBeTruthy()
+      expect(t.description).toBe(def!.description)
+    }
   })
 })
 

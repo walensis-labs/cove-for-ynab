@@ -39,10 +39,22 @@ function selectTools(writeTools: 'all' | 'none' | string[]): ToolDef[] {
   return tools.filter((t) => !t.write || allowed.has(t.name))
 }
 
+// Truthful Tool Output, Task 3(c): "Undoable." is a static claim in several tool descriptions, but
+// undo_last depends on an undo journal that not every deployment has (the hosted multi-tenant tier's
+// buildYnab passes none, and undo_last is deliberately not registered there). Same failure class as the
+// writeDisabledHint fix: the library must not assert a deployment fact it can't know. Matches both
+// "Undoable." and "Undoable (restores from journal)." — always the trailing clause of the description.
+const UNDOABLE_CLAUSE = / Undoable(?: \([^)]*\))?\.$/
+
+function describeFor(def: ToolDef, hasJournal: boolean): string {
+  return hasJournal ? def.description : def.description.replace(UNDOABLE_CLAUSE, '')
+}
+
 export function buildServer(ynab: Ynab, limiter: RateLimiter, opts?: BuildServerOptions): McpServer {
   const server = new McpServer({ name: 'cove-for-ynab', version: typeof __MCP_VERSION__ === 'string' ? __MCP_VERSION__ : '0.0.0-dev' })
+  const hasJournal = !!ynab.journal
   for (const def of selectTools(opts?.writeTools ?? 'all')) {
-    server.registerTool(def.name, { description: def.description, inputSchema: def.schema }, async (args: Record<string, unknown>) => {
+    server.registerTool(def.name, { description: describeFor(def, hasJournal), inputSchema: def.schema }, async (args: Record<string, unknown>) => {
       try {
         const result = await def.handler(ynab, args)
         const warning = limiter.warning()

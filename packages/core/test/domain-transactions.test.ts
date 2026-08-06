@@ -112,6 +112,22 @@ describe('listTransactions', () => {
     expect(res.transactions[0]).toEqual({ payee_name: 'Kroger', transfer_account_id: null, amount: -45.5, amountText: '-$45.50' })
     expect(JSON.stringify(res.transactions[0])).toContain('transfer_account_id')
   })
+  // Truthful Tool Output, Task 3(b): importId passes YNAB's raw milliunits straight through
+  // (`YNAB:-1000000:2026-08-06:1`) and sitting that bare string beside a correctly-converted `amount`
+  // is exactly what triggered the recompute spiral pinned in Task 1's tests above. It answers no user
+  // question by default, so it leaves the default projection — but must stay reachable for anyone who
+  // explicitly asks for it via `fields`.
+  it('drops importId from the default (no fields) projection but returns it via explicit fields', async () => {
+    const client = { request: vi.fn(async () => ({ transactions: [apiTxn({ import_id: 'YNAB:-1000000:2026-08-06:1' })] })) } as any
+    const y = new Ynab({ client, allowWrites: false })
+    const defaultRes: any = await y.listTransactions('p1', {})
+    expect(defaultRes.transactions[0]).not.toHaveProperty('importId')
+    // Rest of the row is untouched — this isn't a narrower default field set, just importId's absence.
+    expect(defaultRes.transactions[0].amount).toBe(-45.5)
+    expect(defaultRes.transactions[0].amountText).toBe('-$45.50')
+    const explicitRes: any = await y.listTransactions('p1', { fields: ['import_id'] as any })
+    expect(explicitRes.transactions[0]).toEqual({ import_id: 'YNAB:-1000000:2026-08-06:1' })
+  })
 })
 
 describe('writes', () => {

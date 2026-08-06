@@ -15,6 +15,13 @@ const BLOCKER_CAP = 50
 // Money-valued keys on Txn that carry a `${key}Text` companion — used by listTransactions' `fields`
 // projection (MINOR 4) to attach the companion even when the caller didn't explicitly ask for it.
 const MONEY_TXN_FIELDS = new Set<keyof Txn>(['amount'])
+// Truthful Tool Output, Task 3(b): fields present on the full Txn shape but excluded from
+// listTransactions' DEFAULT (no explicit `fields`) projection. importId passes YNAB's raw
+// milliunit-embedded import key straight through (`YNAB:-1000000:2026-08-06:1`) — sitting a bare
+// milliunit figure beside the correctly-converted `amount` is exactly what triggered the recompute
+// spiral pinned in the mapTxn amountText tests above. It answers no user question by default and stays
+// reachable via explicit `fields` selection (the `fields` branch below never consults this set).
+const DEFAULT_OMIT_TXN_FIELDS = new Set<keyof Txn>(['importId'])
 
 function toEvidenceComponent(c: AttributionComponent) {
   const { cause, amountMilli, evidence } = c
@@ -326,7 +333,7 @@ export class Ynab {
           if (MONEY_TXN_FIELDS.has(key)) entries.push([`${f}Text`, t[`${key}Text` as keyof Txn] ?? null])
           return entries
         })))
-      : page
+      : page.map((t) => Object.fromEntries(Object.entries(t).filter(([k]) => !DEFAULT_OMIT_TXN_FIELDS.has(k as keyof Txn))))
     return { effectiveWindow, total: all.length, transactions: rows, page: { limit, offset, returned: page.length } }
   }
 
