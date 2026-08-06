@@ -12,6 +12,9 @@ import type { CategorySnapshot, ScheduledSnapshot, Txn } from './types.js'
 
 const d = milliToDollars
 const BLOCKER_CAP = 50
+// Money-valued keys on Txn that carry a `${key}Text` companion — used by listTransactions' `fields`
+// projection (MINOR 4) to attach the companion even when the caller didn't explicitly ask for it.
+const MONEY_TXN_FIELDS = new Set<keyof Txn>(['amount'])
 
 function toEvidenceComponent(c: AttributionComponent) {
   const { cause, amountMilli, evidence } = c
@@ -147,6 +150,31 @@ const CATEGORY_FIELD_LABEL: Record<string, string> = {
   goal_target_date: 'goal target date', goal_frequency: 'goal frequency', goal_needs_whole_amount: 'goal needs whole amount',
 }
 
+/**
+ * IMPORTANT 3 (truthful-output review): fills in the *Text companions on a MonthCloseRecord before it
+ * reaches the ledger's 'close' path. backfillLedger already builds its records with companions inline;
+ * recordMonthClose didn't, so get_month_close_ledger could return a response mixing labeled backfill
+ * rows with bare-number close rows in the same list — arguably worse than uniformly unlabeled. Only
+ * fills a field that's missing (undefined) so a caller-supplied Text value is never overwritten, and
+ * every field stays optional per MonthCloseRecord's additive-only contract (pre-existing D1 rows without
+ * these fields must still deserialize).
+ */
+function withMoneyText(record: Omit<MonthCloseRecord, 'id' | 'recordedAt'>): Omit<MonthCloseRecord, 'id' | 'recordedAt'> {
+  return {
+    ...record,
+    perCard: record.perCard.map((c) => ({
+      ...c,
+      workingAsOfText: c.workingAsOfText ?? formatDollars(c.workingAsOf),
+      clearedAsOfText: c.clearedAsOfText ?? formatDollars(c.clearedAsOf),
+      availableAtMonthEndText: c.availableAtMonthEndText ?? formatDollars(c.availableAtMonthEnd),
+      gapText: c.gapText ?? formatDollars(c.gap),
+    })),
+    ...(record.causes ? { causes: record.causes.map((c) => ({ ...c, changeText: c.changeText ?? formatDollars(c.change) })) } : {}),
+    ...(record.moves ? { moves: record.moves.map((m) => ({ ...m, amountText: m.amountText ?? formatDollars(m.amount) })) } : {}),
+    ...(record.buffer !== undefined ? { bufferText: record.bufferText ?? formatDollars(record.buffer) } : {}),
+  }
+}
+
 /** Plain-language "field back to prior value" clauses for updateCategory's inverse, keyed off the
  * API-wire `body` that was just sent (so only fields the caller actually changed are described). */
 function categoryInverseClauses(body: Record<string, unknown>, prior: any): string {
@@ -177,14 +205,18 @@ export class Ynab {
 
   async listPlans() {
     const data = await this.client.request<any>('/plans')
-    return data.plans.map((p: any) => ({ id: p.id, name: p.name, currency: p.currency_format?.iso_code ?? 'USD', lastModified: p.last_modified_on }))
+    // currencySymbol is additive: `currency` (the ISO code) is unchanged for existing callers.
+    // Lets getPlanOverview (which already has the plan in hand) format money in the plan's real
+    // symbol instead of a hardcoded "$" — see NOTE 7 in the truthful-output review.
+    return data.plans.map((p: any) => ({ id: p.id, name: p.name, currency: p.currency_format?.iso_code ?? 'USD', currencySymbol: p.currency_format?.currency_symbol ?? '$', lastModified: p.last_modified_on }))
   }
 
   async getMonth(planId: string, month: string) {
     const data = await this.client.request<any>(`/plans/${planId}/months/${month}`)
     const m = data.month
+    const readyToAssign = d(m.to_be_budgeted)
     return {
-      month: m.month, readyToAssign: d(m.to_be_budgeted), ageOfMoney: m.age_of_money ?? null,
+      month: m.month, readyToAssign, readyToAssignText: formatDollars(readyToAssign), ageOfMoney: m.age_of_money ?? null,
       categories: m.categories.filter((c: any) => !c.deleted).map(mapCategory),
     }
   }
@@ -222,14 +254,20 @@ export class Ynab {
       this.client.request<any>(`/plans/${planId}/accounts`),
       this.getMonth(planId, 'current'),
     ])
-    const plan = plans.find((p: any) => p.id === planId) ?? { id: planId, name: '(current plan)', currency: 'USD' }
+    const plan = plans.find((p: any) => p.id === planId) ?? { id: planId, name: '(current plan)', currency: 'USD', currencySymbol: '$' }
+    // NOTE 7 (truthful-output review): the plan's real currency is already in hand here, so every
+    // *Text this method emits uses it — a EUR budget must not get a confident, wrong "$" in a field
+    // we're telling the model to quote verbatim. Money computed OUTSIDE this method (e.g. individual
+    // category *Text from getMonth/mapCategory) still hardcodes "$"; threading currency through every
+    // emitter in the codebase is a bigger change than this task — see the task report for the full list.
+    const symbol = plan.currencySymbol ?? '$'
     const accounts = accountsData.accounts.filter((a: any) => !a.deleted && !a.closed).map((a: any) => {
       const balance = d(a.balance), cleared = d(a.cleared_balance), uncleared = d(a.uncleared_balance)
       return {
         id: a.id, name: a.name, type: a.type, onBudget: !!a.on_budget,
-        balance, balanceText: formatDollars(balance),
-        cleared, clearedText: formatDollars(cleared),
-        uncleared, unclearedText: formatDollars(uncleared),
+        balance, balanceText: formatDollars(balance, { symbol }),
+        cleared, clearedText: formatDollars(cleared, { symbol }),
+        uncleared, unclearedText: formatDollars(uncleared, { symbol }),
         lastReconciledAt: a.last_reconciled_at ?? null,
       }
     })
@@ -246,16 +284,16 @@ export class Ynab {
     return {
       plan: { id: plan.id, name: plan.name, currency: plan.currency },
       month: {
-        month: month.month, readyToAssign: month.readyToAssign, readyToAssignText: formatDollars(month.readyToAssign),
-        ageOfMoney: month.ageOfMoney, activity: roundedActivity, activityText: formatDollars(roundedActivity),
-        budgeted: roundedBudgeted, budgetedText: formatDollars(roundedBudgeted),
+        month: month.month, readyToAssign: month.readyToAssign, readyToAssignText: formatDollars(month.readyToAssign, { symbol }),
+        ageOfMoney: month.ageOfMoney, activity: roundedActivity, activityText: formatDollars(roundedActivity, { symbol }),
+        budgeted: roundedBudgeted, budgetedText: formatDollars(roundedBudgeted, { symbol }),
       },
       accounts,
       categoryGroups: [...groups.entries()].map(([name, v]) => {
         const assigned = Math.round(v.assigned * 100) / 100
         const groupActivity = Math.round(v.activity * 100) / 100
         const available = Math.round(v.available * 100) / 100
-        return { name, assigned, assignedText: formatDollars(assigned), activity: groupActivity, activityText: formatDollars(groupActivity), available, availableText: formatDollars(available) }
+        return { name, assigned, assignedText: formatDollars(assigned, { symbol }), activity: groupActivity, activityText: formatDollars(groupActivity, { symbol }), available, availableText: formatDollars(available, { symbol }) }
       }),
     }
   }
@@ -278,10 +316,15 @@ export class Ynab {
     const offset = opts.offset ?? 0
     const page = all.slice(offset, offset + limit)
     const rows = opts.fields?.length
-      ? page.map((t) => Object.fromEntries(opts.fields!.map((f) => {
+      ? page.map((t) => Object.fromEntries(opts.fields!.flatMap((f) => {
           const key = (TXN_FIELD_ALIASES[f as string] ?? f) as keyof Txn
           const v = t[key]
-          return [f, v === undefined ? null : v]
+          const entries: [string, unknown][] = [[f, v === undefined ? null : v]]
+          // MINOR 4 (truthful-output review): a `fields` projection narrows to exactly the requested
+          // keys — without this, `fields: ['amount']` would return a bare `{ amount: -1000 }` with no
+          // companion, even though the unprojected row always carries amountText alongside amount.
+          if (MONEY_TXN_FIELDS.has(key)) entries.push([`${f}Text`, t[`${key}Text` as keyof Txn] ?? null])
+          return entries
         })))
       : page
     return { effectiveWindow, total: all.length, transactions: rows, page: { limit, offset, returned: page.length } }
@@ -512,7 +555,11 @@ export class Ynab {
         throw new Error(`${lead}: "${fromName}" is short ${formatDollars(amount)} ` +
           `(now ${formatDollars(milliToDollars(fromPrior - milli))}, was ${formatDollars(milliToDollars(fromPrior))}); ` +
           `"${toName}" was never credited (still ${formatDollars(milliToDollars(toPrior))}). ` +
-          `To fix it, manually assign ${formatDollars(amount)} back to "${fromName}".`)
+          // assign_budget sets the ABSOLUTE assigned amount, not a delta — naming `amount` here would
+          // instruct a SECOND wrong write (e.g. setting Dining Out to $100 instead of restoring it to
+          // $500). Must name the restore-to figure (fromPrior), matching the idiom assignBudget's own
+          // inverse uses two functions above.
+          `To fix it, manually set the assigned amount for "${fromName}" in ${month} back to ${formatDollars(milliToDollars(fromPrior))}.`)
       }
       throw new Error(`${(e as Error).message} — the first half of the move was rolled back; no money moved.`)
     }
@@ -993,7 +1040,7 @@ export class Ynab {
 
   async recordMonthClose(record: Omit<MonthCloseRecord, 'id' | 'recordedAt'>): Promise<MonthCloseRecord> {
     if (!this.ledger) throw new Error('No ledger configured — this server was started without a LedgerStore.')
-    return await this.ledger.append(record)
+    return await this.ledger.append(withMoneyText(record))
   }
 
   async getMonthCloseLedger(opts?: { limit?: number; cutoff?: string; kind?: 'close' | 'backfill' }): Promise<{ records: MonthCloseRecord[]; note?: string }> {

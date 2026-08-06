@@ -230,7 +230,17 @@ describe('moveMoney double failure', () => {
       return { category: {} }
     }) } as any
     const y = new Ynab({ client, journal, allowWrites: true })
-    await expect(y.moveMoney('p1', '2026-07-01', 'c-from', 'c-to', 100, undefined, { confirm: true })).rejects.toThrow(/half-applied.*undo_last|undo_last.*half-applied/is)
+    // MINOR 5: pinned to the exact byte-identical message (toBe, not a regex) — this is the with-journal
+    // instruction the spec requires unchanged; a regex would pass through a reworded lead, a lost ';',
+    // or other wording drift that a byte-identical requirement must catch.
+    try {
+      await y.moveMoney('p1', '2026-07-01', 'c-from', 'c-to', 100, undefined, { confirm: true })
+      throw new Error('expected moveMoney to reject')
+    } catch (e) {
+      expect((e as Error).message).toBe(
+        'to-patch failed; rollback also failed: rollback failed — the move is half-applied; run undo_last to restore both categories.'
+      )
+    }
     const entry = journal.popLastCommitted()
     expect(entry).toBeDefined()
     expect(entry!.inverse).toHaveLength(2)
@@ -271,8 +281,17 @@ describe('moveMoney double failure', () => {
       // and gives a manual correction, in dollars, not milliunits.
       expect(msg).toMatch(/Dining Out/)
       expect(msg).toMatch(/Credit Card Payment/)
-      expect(msg).toContain('$100.00')
+      expect(msg).toContain('$100.00') // "is short $100.00" — the delta, correctly named there
       expect(msg).not.toMatch(/\b100000\b/)
+      // IMPORTANT 1: assign_budget sets the ABSOLUTE assigned amount, not a delta. The prior code told
+      // the model to "manually assign $100.00 back to Dining Out" — following that literally would set
+      // Dining Out to $100 instead of restoring it to its prior $500, a second wrong write on top of the
+      // half-applied one. The fix instruction must name the restore-to figure (fromPrior = $500.00), not
+      // the move amount ($100.00). Mutation check: if the fix regresses to naming `amount` again here,
+      // the "back to $500.00" substring disappears and "back to $100.00" reappears.
+      expect(msg).toMatch(/manually set the assigned amount for "Dining Out" in 2026-07-01 back to \$500\.00/)
+      expect(msg).not.toMatch(/manually assign \$100\.00 back to "Dining Out"/)
+      expect(msg).not.toMatch(/back to \$100\.00/)
     }
   })
 })

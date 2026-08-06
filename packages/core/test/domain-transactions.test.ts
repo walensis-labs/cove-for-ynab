@@ -107,7 +107,9 @@ describe('listTransactions', () => {
     const client = { request: vi.fn(async () => ({ transactions: [apiTxn({ transfer_account_id: null })] })) } as any
     const y = new Ynab({ client, allowWrites: false })
     const res: any = await y.listTransactions('p1', { fields: ['payee_name', 'transfer_account_id', 'amount'] as any })
-    expect(res.transactions[0]).toEqual({ payee_name: 'Kroger', transfer_account_id: null, amount: -45.5 })
+    // MINOR 4: `fields: ['amount']` must still carry its formatted companion — a projection shouldn't be
+    // able to strip a money field down to a bare number when the unprojected row always has amountText.
+    expect(res.transactions[0]).toEqual({ payee_name: 'Kroger', transfer_account_id: null, amount: -45.5, amountText: '-$45.50' })
     expect(JSON.stringify(res.transactions[0])).toContain('transfer_account_id')
   })
 })

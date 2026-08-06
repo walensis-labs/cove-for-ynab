@@ -17,7 +17,7 @@ export interface MonthCloseRecord {
   blockers: { unapproved: number; uncategorized: number; unclearedBeforeCutoff: number }
   causes?: { month: string; change: number; changeText?: string; cause: string; narrative?: string }[]
   moves?: { from: string; to: string; amount: number; amountText?: string; source: 'category' | 'rta'; reason?: string }[]
-  buffer?: number; note?: string
+  buffer?: number; bufferText?: string; note?: string
   kind?: 'close' | 'backfill' // absent = 'close' (pre-Phase-1a records predate this field)
 }
 

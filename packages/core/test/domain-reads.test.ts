@@ -27,13 +27,16 @@ describe('Ynab reads', () => {
     const client = fakeClient({ '/plans': () => ({ plans: [{ id: 'p1', name: 'Family', last_modified_on: '2026-07-01T00:00:00Z', currency_format: { iso_code: 'USD' } }] }) })
     const y = new Ynab({ client, allowWrites: false })
     const plans = await y.listPlans()
-    expect(plans).toEqual([{ id: 'p1', name: 'Family', currency: 'USD', lastModified: '2026-07-01T00:00:00Z' }])
+    expect(plans).toEqual([{ id: 'p1', name: 'Family', currency: 'USD', currencySymbol: '$', lastModified: '2026-07-01T00:00:00Z' }])
   })
   it('getMonth converts milliunits to dollars everywhere', async () => {
     const client = fakeClient({ '/plans/p1/months/2026-07-01': () => monthFixture })
     const y = new Ynab({ client, allowWrites: false })
     const m = await y.getMonth('p1', '2026-07-01')
     expect(m.readyToAssign).toBe(150.25)
+    // IMPORTANT 2: get_month is the tool the month-close playbook actually reads readyToAssign from
+    // (routing straight into assign_budget) — it needs a companion just like getPlanOverview's does.
+    expect(m.readyToAssignText).toBe('$150.25')
     expect(m.categories[1]).toMatchObject({
       name: 'Dining', assigned: 200, assignedText: '$200.00', activity: -155.5, activityText: '-$155.50',
       available: 44.5, availableText: '$44.50', goalTarget: null, goalTargetText: null,
@@ -116,6 +119,30 @@ describe('Ynab reads', () => {
       { name: 'Bills', assigned: 1500, assignedText: '$1,500.00', activity: -1500, activityText: '-$1,500.00', available: 0, availableText: '$0.00' },
       { name: 'Fun', assigned: 200, assignedText: '$200.00', activity: -155.5, activityText: '-$155.50', available: 44.5, availableText: '$44.50' },
     ])
+  })
+  // NOTE 7 (truthful-output review): getPlanOverview already has the plan's real currency in hand —
+  // a EUR budget must not get a confident, wrong "$" in a field we're telling the model to quote
+  // verbatim. That's worse than a bare number, because the wrong symbol looks authoritative.
+  it('getPlanOverview uses the plan\'s real currency symbol, not a hardcoded "$"', async () => {
+    const client = fakeClient({
+      '/plans': () => ({ plans: [{ id: 'p1', name: 'EU Budget', last_modified_on: '2026-07-01T00:00:00Z', currency_format: { iso_code: 'EUR', currency_symbol: '€' } }] }),
+      '/plans/p1/accounts': () => ({
+        accounts: [
+          { id: 'a1', name: 'Checking', type: 'checking', on_budget: true, balance: 1234560, cleared_balance: 1000000, uncleared_balance: 234560, last_reconciled_at: null, deleted: false, closed: false },
+        ],
+      }),
+      '/plans/p1/months/current': () => monthFixture,
+    })
+    const y = new Ynab({ client, allowWrites: false })
+    const overview = await y.getPlanOverview('p1')
+    expect(overview.plan.currency).toBe('EUR')
+    expect(overview.month.readyToAssignText).toBe('€150.25')
+    expect(overview.month.budgetedText).toBe('€1,700.00')
+    expect(overview.month.activityText).toBe('-€1,655.50')
+    expect(overview.accounts[0]!.balanceText).toBe('€1,234.56')
+    expect(overview.accounts[0]!.clearedText).toBe('€1,000.00')
+    expect(overview.accounts[0]!.unclearedText).toBe('€234.56')
+    expect(overview.categoryGroups[0]!.assignedText).toBe('€1,500.00')
   })
   it('listScheduled converts amounts and excludes deleted', async () => {
     const client = fakeClient({

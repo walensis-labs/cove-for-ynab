@@ -247,6 +247,43 @@ describe('getMonthCloseLedger — kind filter passthrough', () => {
   })
 })
 
+// IMPORTANT 3: recordMonthClose (the kind:'close' write path) must populate the same *Text companions
+// backfillLedger already puts on kind:'backfill' rows — otherwise get_month_close_ledger can return a
+// single response mixing labeled and unlabeled money, which is worse than uniformly unlabeled.
+describe('recordMonthClose — money *Text companions on the close path', () => {
+  it('fills perCard, causes, moves, and buffer companions when the caller omits them', async () => {
+    const ledger = tempLedger()
+    const y = new Ynab({ client: { request: vi.fn() } as any, allowWrites: false, ledger })
+    await y.recordMonthClose({
+      planId: 'p1', cutoff: '2026-07-31', gapStatus: 'final',
+      perCard: [{ account: 'Citi', workingAsOf: -3241.76, clearedAsOf: -3241.76, availableAtMonthEnd: 2662.65, gap: -579.11 }],
+      blockers: { unapproved: 0, uncategorized: 0, unclearedBeforeCutoff: 0 },
+      causes: [{ month: '2026-07', change: -200, cause: 'uncovered_spending' }],
+      moves: [{ from: 'Dining Out', to: 'Kid Things', amount: 348.17, source: 'category' }],
+      buffer: 100,
+    })
+    const [record] = (await y.getMonthCloseLedger({ kind: 'close' })).records
+    expect(record!.perCard[0]).toMatchObject({
+      workingAsOfText: '-$3,241.76', clearedAsOfText: '-$3,241.76', availableAtMonthEndText: '$2,662.65', gapText: '-$579.11',
+    })
+    expect(record!.causes).toEqual([{ month: '2026-07', change: -200, changeText: '-$200.00', cause: 'uncovered_spending' }])
+    expect(record!.moves).toEqual([{ from: 'Dining Out', to: 'Kid Things', amount: 348.17, amountText: '$348.17', source: 'category' }])
+    expect(record!.buffer).toBe(100)
+    expect(record!.bufferText).toBe('$100.00')
+  })
+  it('never overwrites a caller-supplied *Text value', async () => {
+    const ledger = tempLedger()
+    const y = new Ynab({ client: { request: vi.fn() } as any, allowWrites: false, ledger })
+    await y.recordMonthClose({
+      planId: 'p1', cutoff: '2026-07-31', gapStatus: 'final',
+      perCard: [{ account: 'Citi', workingAsOf: -100, workingAsOfText: 'CUSTOM', clearedAsOf: -100, availableAtMonthEnd: 100, gap: 0 }],
+      blockers: { unapproved: 0, uncategorized: 0, unclearedBeforeCutoff: 0 },
+    })
+    const [record] = (await y.getMonthCloseLedger({ kind: 'close' })).records
+    expect(record!.perCard[0]!.workingAsOfText).toBe('CUSTOM')
+  })
+})
+
 // Task 1 (Phase 1b worker substrate): Ynab must accept ANY LedgerLike implementation — sync (LedgerStore)
 // or async (e.g. a future D1-backed worker ledger) — and await every call uniformly. This stub returns
 // Promises from all three methods to prove Ynab doesn't assume synchronous ledger access.
@@ -267,7 +304,14 @@ describe('Ynab + async LedgerLike (worker substrate)', () => {
   it('recordMonthClose awaits an async ledger and resolves the appended record', async () => {
     const y = new Ynab({ client: { request: vi.fn() } as any, allowWrites: false, ledger: asyncLedgerStub() })
     const result = await y.recordMonthClose(asyncStubRecord())
-    expect(result).toEqual({ ...asyncStubRecord(), id: 'x', recordedAt: 'now', kind: 'close' })
+    // IMPORTANT 3: recordMonthClose fills in the *Text companions (perCard's four fields here) before
+    // handing the record to ledger.append — so a 'close' row looks the same, money-labeling-wise, as a
+    // 'backfill' row in the same get_month_close_ledger response.
+    expect(result).toEqual({
+      ...asyncStubRecord(),
+      perCard: [{ account: 'Citi', workingAsOf: -100, workingAsOfText: '-$100.00', clearedAsOf: -100, clearedAsOfText: '-$100.00', availableAtMonthEnd: 100, availableAtMonthEndText: '$100.00', gap: 0, gapText: '$0.00' }],
+      id: 'x', recordedAt: 'now', kind: 'close',
+    })
   })
   it('getMonthCloseLedger awaits an async ledger and resolves its list', async () => {
     const y = new Ynab({ client: { request: vi.fn() } as any, allowWrites: false, ledger: asyncLedgerStub() })
