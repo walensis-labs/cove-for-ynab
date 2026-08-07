@@ -21,13 +21,21 @@ function lastDayOfIso(month: string): string {
 }
 
 // Currency-symbol threading (fix/currency-symbol): every *Text-emitting Ynab method now resolves the
-// plan's real symbol via one /plans fetch before formatting — a resolvable USD plan here keeps this
-// file's historical '$'-prefixed assertions unchanged.
-const PLANS_USD = { plans: [{ id: 'last-used', name: 'Family', last_modified_on: '2026-07-01T00:00:00Z', currency_format: { iso_code: 'USD', currency_symbol: '$' } }] }
+// plan's real currency format via one `GET /plans/{plan_id}/settings` fetch before formatting.
+//
+// CRITICAL 1 fix: this used to be simulated with a `/plans` LIST fixture whose plan `id` was the
+// literal string 'last-used' — a plan YNAB can never actually return, since 'last-used'/'default' are
+// path-param ALIASES, not real plan ids (see YNAB's own getPlanSettingsById docs). That impossible
+// fixture is exactly what let the old `plans.find(p => p.id === planId)` resolution "work" in tests
+// while being broken against the real API for every alias call. `/plans/{plan_id}/settings` takes
+// planId (or the alias) straight into the URL and doesn't need to find anything — a settings-endpoint
+// stub keyed on ANY path ending in '/settings' correctly simulates that for 'last-used', 'p1', or any
+// other id/alias used below, with no id-matching trick required.
+const PLAN_SETTINGS_USD = { settings: { currency_format: { iso_code: 'USD', currency_symbol: '$' } } }
 
 function seriesClient() {
   return { request: vi.fn(async (path: string) => {
-    if (path === '/plans') return PLANS_USD
+    if (path.endsWith('/settings')) return PLAN_SETTINGS_USD
     const m = path.match(/\/months\/(\d{4}-\d{2})-01\/categories\/c1$/)
     if (m) {
       const month = m[1]!
@@ -50,8 +58,12 @@ describe('getCategoryHistory', () => {
       { month: '2026-06', assigned: 100, assignedText: '$100.00', activity: -50, activityText: '-$50.00', available: 500, availableText: '$500.00' },
       { month: '2026-07', assigned: 100, assignedText: '$100.00', activity: -50, activityText: '-$50.00', available: 700, availableText: '$700.00' },
     ])
-    // 3 month-category fetches + 1 /plans currency-symbol lookup (fix/currency-symbol).
+    // 3 month-category fetches + 1 settings currency-format lookup (fix/currency-symbol).
     expect(c.request).toHaveBeenCalledTimes(4)
+    // MUTATION CHECK (CRITICAL 1): the symbol lookup must have hit the plan_id/alias-aware settings
+    // endpoint, not `/plans` (which cannot resolve an alias like 'last-used' at all).
+    expect(c.request.mock.calls.some(([p]: any[]) => p === '/plans/last-used/settings')).toBe(true)
+    expect(c.request.mock.calls.some(([p]: any[]) => p === '/plans')).toBe(false)
   })
   it('validates the range before any fetch', async () => {
     const c = { request: vi.fn() } as any
@@ -64,7 +76,7 @@ describe('getCategoryHistory', () => {
 describe('getCreditCardFloatHistory', () => {
   it('composes owed/available/gap in dollars with changed flags', async () => {
     const c = { request: vi.fn(async (path: string) => {
-      if (path === '/plans') return PLANS_USD
+      if (path.endsWith('/settings')) return PLAN_SETTINGS_USD
       const m = path.match(/\/months\/(\d{4}-\d{2})-01\/categories\/p1$/)
       if (m) return { category: { id: 'p1', name: 'Citi Card', budgeted: m[1] === '2026-08' ? 250000 : 0, activity: 0, balance: m[1] === '2026-08' ? 1000000 : 500000 } }
       if (path.endsWith('/accounts/a1')) return { account: { id: 'a1', name: 'Citi Card', balance: -1000000 } }
@@ -129,7 +141,7 @@ const [M3, M2, M1] = [monthOffset(-3), monthOffset(-2), monthOffset(-1)]
 // Same shape as the getCreditCardFloatHistory fixture above (3 months, card ends covered at the newest month).
 function coveredFloatClient() {
   return { request: vi.fn(async (path: string) => {
-    if (path === '/plans') return PLANS_USD
+    if (path.endsWith('/settings')) return PLAN_SETTINGS_USD
     const m = path.match(/\/months\/(\d{4}-\d{2})-01\/categories\/p1$/)
     if (m) return { category: { id: 'p1', name: 'Citi Card', budgeted: m[1] === M1 ? 250000 : 0, activity: 0, balance: m[1] === M1 ? 1000000 : 500000 } }
     if (path.endsWith('/accounts/a1')) return { account: { id: 'a1', name: 'Citi Card', balance: -1000000 } }
@@ -144,7 +156,7 @@ function coveredFloatClient() {
 // Payment category never funded (available 0 every month) — gap stays nonzero (negative/float) across the whole window.
 function neverCoveredFloatClient() {
   return { request: vi.fn(async (path: string) => {
-    if (path === '/plans') return PLANS_USD
+    if (path.endsWith('/settings')) return PLAN_SETTINGS_USD
     const m = path.match(/\/months\/(\d{4}-\d{2})-01\/categories\/p1$/)
     if (m) return { category: { id: 'p1', name: 'Citi Card', budgeted: 0, activity: 0, balance: 0 } }
     if (path.endsWith('/accounts/a1')) return { account: { id: 'a1', name: 'Citi Card', balance: -1000000 } }
@@ -159,7 +171,7 @@ function neverCoveredFloatClient() {
 // Payment category permanently over-funded — gap stays nonzero (positive/surplus) across the whole window.
 function surplusFloatClient() {
   return { request: vi.fn(async (path: string) => {
-    if (path === '/plans') return PLANS_USD
+    if (path.endsWith('/settings')) return PLAN_SETTINGS_USD
     const m = path.match(/\/months\/(\d{4}-\d{2})-01\/categories\/p1$/)
     if (m) return { category: { id: 'p1', name: 'Citi Card', budgeted: 0, activity: 0, balance: 800000 } }
     if (path.endsWith('/accounts/a1')) return { account: { id: 'a1', name: 'Citi Card', balance: -500000 } }
@@ -258,15 +270,20 @@ describe('getMonthCloseLedger — kind filter passthrough', () => {
   })
 })
 
-// IMPORTANT 3: recordMonthClose (the kind:'close' write path) must populate the same *Text companions
-// backfillLedger already puts on kind:'backfill' rows — otherwise get_month_close_ledger can return a
-// single response mixing labeled and unlabeled money, which is worse than uniformly unlabeled.
-const PLANS_USD_P1 = { plans: [{ id: 'p1', name: 'Family', last_modified_on: '2026-07-01T00:00:00Z', currency_format: { iso_code: 'USD', currency_symbol: '$' } }] }
-
+// IMPORTANT 3: recordMonthClose (the kind:'close' write path) must populate the same *Text-shaped
+// companions backfillLedger already puts on kind:'backfill' rows — otherwise get_month_close_ledger can
+// return a single response mixing labeled and unlabeled money, which is worse than uniformly unlabeled.
+//
+// currency-symbol review IMPORTANT 3 fix: recordMonthClose's own description says it "never touches
+// YNAB" — it used to silently contradict that by awaiting #resolveCurrency (a network request) before
+// this purely local ledger append. Fixed by never resolving a symbol here at all: the companions below
+// render currency-NEUTRAL (no "$"), and the client is asserted to receive zero requests, proving the
+// tool is genuinely network-free again.
 describe('recordMonthClose — money *Text companions on the close path', () => {
-  it('fills perCard, causes, moves, and buffer companions when the caller omits them', async () => {
+  it('fills perCard, causes, moves, and buffer companions (currency-neutral, no network call) when the caller omits them', async () => {
     const ledger = tempLedger()
-    const y = new Ynab({ client: { request: vi.fn(async (path: string) => (path === '/plans' ? PLANS_USD_P1 : undefined)) } as any, allowWrites: false, ledger })
+    const request = vi.fn()
+    const y = new Ynab({ client: { request } as any, allowWrites: false, ledger })
     await y.recordMonthClose({
       planId: 'p1', cutoff: '2026-07-31', gapStatus: 'final',
       perCard: [{ account: 'Citi', workingAsOf: -3241.76, clearedAsOf: -3241.76, availableAtMonthEnd: 2662.65, gap: -579.11 }],
@@ -277,12 +294,15 @@ describe('recordMonthClose — money *Text companions on the close path', () => 
     })
     const [record] = (await y.getMonthCloseLedger({ kind: 'close' })).records
     expect(record!.perCard[0]).toMatchObject({
-      workingAsOfText: '-$3,241.76', clearedAsOfText: '-$3,241.76', availableAtMonthEndText: '$2,662.65', gapText: '-$579.11',
+      workingAsOfText: '-3,241.76', clearedAsOfText: '-3,241.76', availableAtMonthEndText: '2,662.65', gapText: '-579.11',
     })
-    expect(record!.causes).toEqual([{ month: '2026-07', change: -200, changeText: '-$200.00', cause: 'uncovered_spending' }])
-    expect(record!.moves).toEqual([{ from: 'Dining Out', to: 'Kid Things', amount: 348.17, amountText: '$348.17', source: 'category' }])
+    expect(record!.causes).toEqual([{ month: '2026-07', change: -200, changeText: '-200.00', cause: 'uncovered_spending' }])
+    expect(record!.moves).toEqual([{ from: 'Dining Out', to: 'Kid Things', amount: 348.17, amountText: '348.17', source: 'category' }])
     expect(record!.buffer).toBe(100)
-    expect(record!.bufferText).toBe('$100.00')
+    expect(record!.bufferText).toBe('100.00')
+    // IMPORTANT 3 mutation check: no request was issued — this tool's description promises it never
+    // touches YNAB; if a future change reintroduces a symbol lookup here, this catches it.
+    expect(request).not.toHaveBeenCalled()
   })
   it('never overwrites a caller-supplied *Text value', async () => {
     const ledger = tempLedger()
@@ -314,15 +334,16 @@ const asyncStubRecord = (cutoff = '2026-07-31') => ({
 })
 
 describe('Ynab + async LedgerLike (worker substrate)', () => {
-  it('recordMonthClose awaits an async ledger and resolves the appended record', async () => {
-    const y = new Ynab({ client: { request: vi.fn(async (path: string) => (path === '/plans' ? PLANS_USD_P1 : undefined)) } as any, allowWrites: false, ledger: asyncLedgerStub() })
+  it('recordMonthClose awaits an async ledger and resolves the appended record (currency-neutral, no network call)', async () => {
+    const y = new Ynab({ client: { request: vi.fn() } as any, allowWrites: false, ledger: asyncLedgerStub() })
     const result = await y.recordMonthClose(asyncStubRecord())
     // IMPORTANT 3: recordMonthClose fills in the *Text companions (perCard's four fields here) before
     // handing the record to ledger.append — so a 'close' row looks the same, money-labeling-wise, as a
-    // 'backfill' row in the same get_month_close_ledger response.
+    // 'backfill' row in the same get_month_close_ledger response. Currency-neutral (no "$") since this
+    // tool never resolves a symbol — see the network-free mutation check above.
     expect(result).toEqual({
       ...asyncStubRecord(),
-      perCard: [{ account: 'Citi', workingAsOf: -100, workingAsOfText: '-$100.00', clearedAsOf: -100, clearedAsOfText: '-$100.00', availableAtMonthEnd: 100, availableAtMonthEndText: '$100.00', gap: 0, gapText: '$0.00' }],
+      perCard: [{ account: 'Citi', workingAsOf: -100, workingAsOfText: '-100.00', clearedAsOf: -100, clearedAsOfText: '-100.00', availableAtMonthEnd: 100, availableAtMonthEndText: '100.00', gap: 0, gapText: '0.00' }],
       id: 'x', recordedAt: 'now', kind: 'close',
     })
   })
@@ -346,7 +367,7 @@ describe('backfillLedger — in-progress month safety', () => {
   // in-progress month opens $300 of float (gap -300), all computed relative to the real clock.
   function midMonthClient(currentMonth: string) {
     return { request: vi.fn(async (path: string) => {
-      if (path === '/plans') return PLANS_USD
+      if (path.endsWith('/settings')) return PLAN_SETTINGS_USD
       const m = path.match(/\/months\/(\d{4}-\d{2})-01\/categories\/p1$/)
       if (m) return { category: { id: 'p1', name: 'Citi Card', budgeted: 0, activity: 0, balance: 200000 } }
       if (path.endsWith('/accounts/a1')) return { account: { id: 'a1', name: 'Citi Card', balance: -500000 } }

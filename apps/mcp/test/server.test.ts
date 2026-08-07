@@ -78,9 +78,10 @@ describe('server', () => {
   })
   it('credit_card_float_history wires both ids to the right endpoints', async () => {
     const fake = { request: vi.fn(async (path: string) => {
-      // fix/currency-symbol: *Text now resolves the plan's real symbol via one /plans fetch instead
-      // of defaulting to "$" — a resolvable USD plan keeps this fixture's '$'-prefixed assertions.
-      if (path === '/plans') return { plans: [{ id: 'p1', name: 'Family', last_modified_on: '2026-07-01T00:00:00Z', currency_format: { iso_code: 'USD', currency_symbol: '$' } }] }
+      // fix/currency-symbol: *Text now resolves the plan's real currency format via one
+      // `GET /plans/{plan_id}/settings` fetch instead of defaulting to "$" — a resolvable USD format
+      // keeps this fixture's '$'-prefixed assertions.
+      if (path.endsWith('/settings')) return { settings: { currency_format: { iso_code: 'USD', currency_symbol: '$' } } }
       if (path.includes('/categories/')) { expect(path).toMatch(/\/categories\/pay-cat$/); return { category: { id: 'pay-cat', name: 'Visa', budgeted: 0, activity: 0, balance: 100000 } } }
       if (path.endsWith('/accounts/card-acct')) return { account: { id: 'card-acct', name: 'Visa', balance: -100000 } }
       if (path.endsWith('/accounts/card-acct/transactions')) return { transactions: [] }
@@ -270,9 +271,13 @@ describe('money classification covers all 35 tools exhaustively (truthful output
 })
 
 describe('money-touching tool descriptions state the unit (truthful output task 3a)', () => {
-  it('every money-touching non-write tool states decimal dollars and the *Text quoting convention', () => {
+  // CRITICAL 2 (currency-symbol review): UNIT_NOTE no longer asserts "decimal dollars" — a non-USD
+  // budget's *Text companions are symbol-less on purpose, and "decimal dollars" sitting next to a bare
+  // number told the model to read it as USD anyway. It now names the budget's own currency instead.
+  it('every money-touching non-write tool states decimal major units of the budget\'s own currency and the *Text quoting convention', () => {
     for (const def of tools.filter((t) => t.money && !t.write)) {
-      expect(def.description, `${def.name}: description doesn't state "decimal dollars"`).toMatch(/decimal dollars/i)
+      expect(def.description, `${def.name}: description doesn't state the unit`).toMatch(/decimal major units/i)
+      expect(def.description, `${def.name}: description asserts "dollars" unconditionally — should name the budget's own currency instead`).not.toMatch(/decimal dollars/i)
       expect(def.description, `${def.name}: description doesn't mention the *Text companion convention`).toMatch(/\*Text/)
     }
   })
@@ -300,7 +305,9 @@ describe('money-touching tool descriptions state the unit (truthful output task 
     for (const def of tools.filter((t) => t.money && t.write)) {
       const schemaDescriptions = Object.values(def.schema).flatMap((f) => collectDescriptions(f))
       const haystack = [def.description, ...schemaDescriptions].join(' ')
-      expect(haystack, `${def.name}: no schema field or description text mentions units ("dollars")`).toMatch(/dollars/i)
+      // CRITICAL 2: `dollars()` no longer asserts "dollars" (fixed for the same reason as UNIT_NOTE
+      // above) — it names "major units of the budget's own currency" instead.
+      expect(haystack, `${def.name}: no schema field or description text mentions units ("major units")`).toMatch(/major units/i)
     }
   })
 })

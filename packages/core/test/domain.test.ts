@@ -2,11 +2,11 @@ import { describe, it, expect, vi } from 'vitest'
 import { Ynab, WriteDisabledError, ConfirmationRequiredError } from '../src/domain.js'
 
 // Currency-symbol threading (fix/currency-symbol): every *Text-emitting Ynab method now resolves the
-// plan's real symbol via one /plans fetch before formatting — an unresolvable symbol renders
-// currency-neutral rather than defaulting to "$", so a client mock that doesn't handle /plans would
-// otherwise strip the "$" this file's fixtures assert. This is a resolvable USD plan so those
-// historical assertions stay unchanged.
-const PLANS_USD = { plans: [{ id: 'p1', name: 'Family', last_modified_on: '2026-07-01T00:00:00Z', currency_format: { iso_code: 'USD', currency_symbol: '$' } }] }
+// plan's real currency format via one `GET /plans/{plan_id}/settings` fetch before formatting — an
+// unresolvable symbol renders currency-neutral rather than defaulting to "$", so a client mock that
+// doesn't handle the settings endpoint would otherwise strip the "$" this file's fixtures assert. This
+// is a resolvable USD format so those historical assertions stay unchanged.
+const PLAN_SETTINGS_USD = { settings: { currency_format: { iso_code: 'USD', currency_symbol: '$', decimal_digits: 2, symbol_first: true, decimal_separator: '.', group_separator: ',', display_symbol: true } } }
 
 describe('WriteDisabledError', () => {
   it('default message names no environment variable', () => {
@@ -55,7 +55,7 @@ describe('Ynab writeDisabledHint wiring', () => {
 describe('moveMoney confirmation gate', () => {
   function client() {
     return { request: vi.fn(async (path: string, opts: any) => {
-      if (path === '/plans') return PLANS_USD
+      if (path.endsWith('/settings')) return PLAN_SETTINGS_USD
       if (!opts?.method) return { category: { id: path.includes('c-from') ? 'c-from' : 'c-to', budgeted: 500000 } }
       return { category: {} }
     }) } as any
@@ -81,7 +81,7 @@ describe('moveMoney confirmation gate', () => {
 describe('assignBudget confirmation gate', () => {
   function client() {
     return { request: vi.fn(async (path: string, opts: any) => {
-      if (path === '/plans') return PLANS_USD
+      if (path.endsWith('/settings')) return PLAN_SETTINGS_USD
       if (!opts?.method) return { category: { id: 'c1', budgeted: 100000 } }
       return { category: { id: 'c1', budgeted: 250000 } }
     }) } as any
@@ -109,7 +109,7 @@ describe('assignBudget confirmation gate', () => {
 describe('moveMoney inverse', () => {
   it('names the reversed direction and the same formatted amount as the move', async () => {
     const client = { request: vi.fn(async (path: string, opts: any) => {
-      if (path === '/plans') return PLANS_USD
+      if (path.endsWith('/settings')) return PLAN_SETTINGS_USD
       if (!opts?.method) {
         if (path.includes('c-from')) return { category: { id: 'c-from', name: 'Dining Out', budgeted: 500000 } }
         return { category: { id: 'c-to', name: 'Credit Card Payment', budgeted: 200000 } }
@@ -131,7 +131,7 @@ describe('moveMoney inverse', () => {
 
   it('never leaks raw milliunits into the inverse string', async () => {
     const client = { request: vi.fn(async (path: string, opts: any) => {
-      if (path === '/plans') return PLANS_USD
+      if (path.endsWith('/settings')) return PLAN_SETTINGS_USD
       if (!opts?.method) return { category: { id: path.includes('c-from') ? 'c-from' : 'c-to', name: 'Cat', budgeted: 500000 } }
       return { category: {} }
     }) } as any
@@ -145,7 +145,7 @@ describe('moveMoney inverse', () => {
 describe('assignBudget inverse', () => {
   it('names the category and the prior formatted amount', async () => {
     const client = { request: vi.fn(async (path: string, opts: any) => {
-      if (path === '/plans') return PLANS_USD
+      if (path.endsWith('/settings')) return PLAN_SETTINGS_USD
       if (!opts?.method) return { category: { id: 'c1', name: 'Groceries', budgeted: 100000 } }
       return { category: { id: 'c1', budgeted: 250000 } }
     }) } as any
@@ -184,7 +184,7 @@ describe('updateTransactions inverse', () => {
   it('batches the prior-value read into a single request regardless of row count', async () => {
     const rows = Array.from({ length: 40 }, (_, i) => txn({ id: `t${i}` }))
     const client = { request: vi.fn(async (path: string, opts: any) => {
-      if (path === '/plans') return PLANS_USD
+      if (path.endsWith('/settings')) return PLAN_SETTINGS_USD
       if (!opts?.method) return { transactions: rows }
       return { transactions: [] }
     }) } as any
@@ -193,13 +193,13 @@ describe('updateTransactions inverse', () => {
     await y.updateTransactions('p1', updates, { confirm: true, expectedCount: updates.length })
     // A per-row loop would issue 40 reads here; the brief requires exactly one bulk TRANSACTIONS read.
     // The /plans currency-symbol lookup is a separate, cached-per-instance concern (fix/currency-symbol).
-    const readCalls = client.request.mock.calls.filter(([path, opts]: any) => !opts?.method && path !== '/plans')
+    const readCalls = client.request.mock.calls.filter(([path, opts]: any) => !opts?.method && !path.endsWith('/settings'))
     expect(readCalls).toHaveLength(1)
   })
 
   it('formats the prior amount as dollars, not milliunits', async () => {
     const client = { request: vi.fn(async (path: string, opts: any) => {
-      if (path === '/plans') return PLANS_USD
+      if (path.endsWith('/settings')) return PLAN_SETTINGS_USD
       if (!opts?.method) return { transactions: [txn({ amount: -50000 })] }
       return { transactions: [] }
     }) } as any
@@ -213,7 +213,7 @@ describe('updateTransactions inverse', () => {
 describe('updateCategory inverse', () => {
   it('names the prior goal amount, formatted as dollars', async () => {
     const client = { request: vi.fn(async (path: string, opts: any) => {
-      if (path === '/plans') return PLANS_USD
+      if (path.endsWith('/settings')) return PLAN_SETTINGS_USD
       if (!opts?.method) return { category: { id: 'c1', name: 'Rent', hidden: false, goal_target: 1000000, goal_target_date: null, goal_frequency: null, goal_needs_whole_amount: null } }
       return { category: { id: 'c1' } }
     }) } as any

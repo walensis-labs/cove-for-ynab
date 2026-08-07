@@ -1,5 +1,5 @@
 import type { Txn } from './types.js'
-import { formatDollars } from './money.js'
+import { formatDollars, type CurrencyFormatOpts } from './money.js'
 
 export const TXN_FIELD_ALIASES: Record<string, string> = {
   payee_name: 'payeeName', payee_id: 'payeeId', category_name: 'categoryName', category_id: 'categoryId',
@@ -34,11 +34,16 @@ export function applyFilters(txns: Txn[], f: TxnFilters): Txn[] {
   })
 }
 
-// `symbol` defaults to '$' so this generic aggregator stays backward-compatible for callers with no
-// currency context (matches formatDollars' own default) — every Ynab-instance call site in domain.ts
-// must pass the plan's *verified* symbol explicitly instead of relying on this default. See NOTE 7 in
-// domain.ts's truthful-output review for why an unverified default is exactly the bug being fixed.
-export function aggregateTxns(txns: Txn[], by: 'category' | 'payee' | 'month', symbol = '$'): { key: string; total: number; totalText: string; count: number }[] {
+// IMPORTANT 5 (currency-symbol review): `symbol` has NO default — this generic aggregator used to
+// silently fall back to "$" for a caller with no currency context (matching formatDollars' own
+// default), which is exactly the unverified-symbol bug the review flagged. `symbol: string | undefined`
+// forces every call site (including external consumers of this exported function) to make an explicit
+// choice; passing `undefined` renders symbol-less rather than asserting dollars. Every Ynab-instance
+// call site in domain.ts passes the plan's *verified* symbol explicitly. `fmt` is an additive, optional
+// second currency param (IMPORTANT 6) carrying the rest of the plan's currency format (decimals,
+// separators, symbol position); domain.ts passes it alongside `symbol` for full fidelity.
+export function aggregateTxns(txns: Txn[], by: 'category' | 'payee' | 'month', symbol: string | undefined, fmt?: CurrencyFormatOpts): { key: string; total: number; totalText: string; count: number }[] {
+  const f: CurrencyFormatOpts = { ...fmt, symbol: symbol ?? '' }
   const groups = new Map<string, { total: number; count: number }>()
   for (const t of txns) {
     const key = by === 'month' ? t.date.slice(0, 7) : (by === 'category' ? t.categoryName : t.payeeName) ?? '(none)'
@@ -47,6 +52,6 @@ export function aggregateTxns(txns: Txn[], by: 'category' | 'payee' | 'month', s
     g.count++
     groups.set(key, g)
   }
-  const rows = [...groups.entries()].map(([key, v]) => ({ key, total: v.total, totalText: formatDollars(v.total, { symbol }), count: v.count }))
+  const rows = [...groups.entries()].map(([key, v]) => ({ key, total: v.total, totalText: formatDollars(v.total, f), count: v.count }))
   return by === 'month' ? rows.sort((a, b) => a.key.localeCompare(b.key)) : rows.sort((a, b) => a.total - b.total)
 }

@@ -31,7 +31,7 @@ describe('Ynab reads', () => {
   })
   it('getMonth converts milliunits to dollars everywhere', async () => {
     const client = fakeClient({
-      '/plans': () => ({ plans: [{ id: 'p1', name: 'Family', last_modified_on: '2026-07-01T00:00:00Z', currency_format: { iso_code: 'USD', currency_symbol: '$' } }] }),
+      '/plans/p1/settings': () => ({ settings: { currency_format: { iso_code: 'USD', currency_symbol: '$' } } }),
       '/plans/p1/months/2026-07-01': () => monthFixture,
     })
     const y = new Ynab({ client, allowWrites: false })
@@ -93,6 +93,7 @@ describe('Ynab reads', () => {
   it('getPlanOverview aggregates accounts and category groups with dollar rounding', async () => {
     const client = fakeClient({
       '/plans': () => ({ plans: [{ id: 'p1', name: 'Family', last_modified_on: '2026-07-01T00:00:00Z', currency_format: { iso_code: 'USD', currency_symbol: '$' } }] }),
+      '/plans/p1/settings': () => ({ settings: { currency_format: { iso_code: 'USD', currency_symbol: '$' } } }),
       '/plans/p1/accounts': () => ({
         accounts: [
           { id: 'a1', name: 'Checking', type: 'checking', on_budget: true, balance: 1234560, cleared_balance: 1000000, uncleared_balance: 234560, last_reconciled_at: null, deleted: false, closed: false },
@@ -129,6 +130,7 @@ describe('Ynab reads', () => {
   it('getPlanOverview uses the plan\'s real currency symbol, not a hardcoded "$"', async () => {
     const client = fakeClient({
       '/plans': () => ({ plans: [{ id: 'p1', name: 'EU Budget', last_modified_on: '2026-07-01T00:00:00Z', currency_format: { iso_code: 'EUR', currency_symbol: '€' } }] }),
+      '/plans/p1/settings': () => ({ settings: { currency_format: { iso_code: 'EUR', currency_symbol: '€' } } }),
       '/plans/p1/accounts': () => ({
         accounts: [
           { id: 'a1', name: 'Checking', type: 'checking', on_budget: true, balance: 1234560, cleared_balance: 1000000, uncleared_balance: 234560, last_reconciled_at: null, deleted: false, closed: false },
@@ -149,7 +151,7 @@ describe('Ynab reads', () => {
   })
   it('listScheduled converts amounts and excludes deleted', async () => {
     const client = fakeClient({
-      '/plans': () => ({ plans: [{ id: 'p1', name: 'Family', last_modified_on: '2026-07-01T00:00:00Z', currency_format: { iso_code: 'USD', currency_symbol: '$' } }] }),
+      '/plans/p1/settings': () => ({ settings: { currency_format: { iso_code: 'USD', currency_symbol: '$' } } }),
       '/plans/p1/scheduled_transactions': () => ({
         scheduled_transactions: [
           { id: 's1', date_next: '2026-08-01', frequency: 'monthly', amount: -45500, payee_name: 'Landlord', category_name: 'Rent', memo: 'August rent', deleted: false },

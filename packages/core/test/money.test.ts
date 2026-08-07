@@ -31,4 +31,22 @@ describe('money', () => {
   it('MINOR 6: throws rather than emit a plausible-looking "$NaN"', () => {
     expect(() => formatDollars(NaN)).toThrow(/NaN/)
   })
+
+  // fix/currency-symbol IMPORTANT 6: formatDollars honors the full CurrencyFormat, not just the symbol.
+  it('USD-shaped opts (or no opts) is byte-identical to the pre-fidelity formatter', () => {
+    expect(formatDollars(1500)).toBe('$1,500.00')
+    expect(formatDollars(1500, { symbol: '$', decimals: 2, symbolFirst: true, decimalSeparator: '.', groupSeparator: ',', displaySymbol: true })).toBe('$1,500.00')
+    expect(formatDollars(-1500)).toBe('-$1,500.00')
+  })
+  it('symbol_first:false suffixes the symbol with a separating space (e.g. SEK)', () => {
+    expect(formatDollars(1000, { symbol: 'kr', symbolFirst: false, decimalSeparator: ',', groupSeparator: ' ' })).toBe('1 000,00 kr')
+    expect(formatDollars(-1000, { symbol: 'kr', symbolFirst: false, decimalSeparator: ',', groupSeparator: ' ' })).toBe('-1 000,00 kr')
+  })
+  it('decimals:0 drops the fractional part entirely (e.g. JPY)', () => {
+    expect(formatDollars(1000, { symbol: '¥', decimals: 0 })).toBe('¥1,000')
+  })
+  it('display_symbol:false omits the symbol even when one is given', () => {
+    expect(formatDollars(1500, { symbol: '$', displaySymbol: false })).toBe('1,500.00')
+    expect(formatDollars(1000, { symbol: 'kr', symbolFirst: false, displaySymbol: false })).toBe('1,000.00')
+  })
 })
