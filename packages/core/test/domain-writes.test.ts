@@ -257,6 +257,10 @@ describe('moveMoney double failure', () => {
     function makeClient() {
       let patchCalls = 0
       return { request: vi.fn(async (path: string, opts: any) => {
+        // Currency-symbol threading (fix/currency-symbol): moveMoney resolves the plan's real currency
+        // format via a `GET /plans/{plan_id}/settings` fetch before formatting; a resolvable USD format
+        // keeps '$100.00' etc. unchanged.
+        if (path.endsWith('/settings')) return { settings: { currency_format: { iso_code: 'USD', currency_symbol: '$' } } }
         if (!opts?.method) return { category: { id: path.includes('c-from') ? 'c-from' : 'c-to', name: path.includes('c-from') ? 'Dining Out' : 'Credit Card Payment', budgeted: 500000 } }
         patchCalls++
         if (patchCalls === 2) throw new Error('to-patch failed')

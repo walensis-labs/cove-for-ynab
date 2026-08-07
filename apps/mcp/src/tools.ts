@@ -23,13 +23,20 @@ export interface ToolDef {
 
 const planId = z.string().describe("Plan id from list_plans, or 'last-used'")
 const month = z.string().describe("ISO month like '2026-07-01', or 'current'")
-const dollars = (s: string) => z.number().describe(s + ' (decimal dollars; negative = outflow)')
+// CRITICAL 2 (currency-symbol review): this used to say "decimal dollars" unconditionally — true for a
+// USD budget, false (and confidently wrong) for anything else. A non-USD *Text companion is symbol-less
+// on purpose (never an unverified guess, see #resolveCurrency in core), but "decimal dollars" sitting
+// next to a bare "-1,000.00" told the model to read it as USD anyway. Naming the CURRENCY as the
+// budget's own, not a fixed unit, removes that false assertion without naming a specific currency this
+// tool can't know in the schema (it varies per plan_id). Function name kept as `dollars` (internal,
+// non-user-facing identifier) to minimize diff — only the emitted description text changed.
+const dollars = (s: string) => z.number().describe(s + ' (decimal major units of the budget\'s own currency; negative = outflow)')
 // Truthful Tool Output, Task 3(a): a production incident had the model report a −$1,000.00 transaction
 // as −$10.00, then −$1.00, before landing on the right answer — mapTxn converted correctly, but no
-// description said the numbers coming back were already dollars, and `importId`'s raw milliunits sat
-// right beside the correct figure. `dollars()` above already states this for write inputs; every
-// money-touching READ tool's description gets the equivalent for its output via this suffix.
-const UNIT_NOTE = ' Amounts are decimal dollars; each has a matching *Text field (e.g. amountText) — quote *Text rather than recomputing.'
+// description said the numbers coming back were already major-unit amounts, and `importId`'s raw
+// milliunits sat right beside the correct figure. `dollars()` above already states the equivalent for
+// write inputs; every money-touching READ tool's description gets this suffix for its output.
+const UNIT_NOTE = ' Amounts are decimal major units of the budget\'s own currency (not milliunits); each has a matching *Text field (e.g. amountText) — quote *Text, don\'t assume "$".'
 
 export const tools: ToolDef[] = [
   // ---- overview
@@ -70,12 +77,12 @@ export const tools: ToolDef[] = [
   // ---- scheduled
   { name: 'list_scheduled_transactions', description: 'All scheduled (upcoming/recurring) transactions with next date, frequency, amount.' + UNIT_NOTE, money: true, schema: { plan_id: planId }, handler: (y, a) => y.listScheduled(a.plan_id) },
   { name: 'create_scheduled_transaction', description: 'Create a scheduled transaction (upcoming bill, recurring income).', write: true, money: true, schema: { plan_id: planId, account_id: z.string(), date: z.string().describe('first occurrence, within 5 years'), amount: dollars('Amount'), frequency: z.string().describe("e.g. 'never','monthly','weekly','yearly'"), payee_name: z.string().optional(), payee_id: z.string().optional(), category_id: z.string().optional(), memo: z.string().optional() }, handler: (y, a) => y.createScheduled(a.plan_id, { accountId: a.account_id, date: a.date, amount: a.amount, frequency: a.frequency, payeeName: a.payee_name, payeeId: a.payee_id, categoryId: a.category_id, memo: a.memo }) },
-  { name: 'update_scheduled_transaction', description: 'Update a scheduled transaction (amount in dollars). Undoable.', write: true, money: true, schema: { plan_id: planId, scheduled_id: z.string(), patch: z.record(z.unknown()).describe('fields to change, snake_case per YNAB API') }, handler: (y, a) => y.updateScheduled(a.plan_id, a.scheduled_id, a.patch) },
+  { name: 'update_scheduled_transaction', description: 'Update a scheduled transaction (amount in decimal major units of the budget\'s own currency). Undoable.', write: true, money: true, schema: { plan_id: planId, scheduled_id: z.string(), patch: z.record(z.unknown()).describe('fields to change, snake_case per YNAB API') }, handler: (y, a) => y.updateScheduled(a.plan_id, a.scheduled_id, a.patch) },
   { name: 'delete_scheduled_transaction', description: 'Delete a scheduled transaction. Requires confirm:true. Undoable.', write: true, schema: { plan_id: planId, scheduled_id: z.string(), confirm: z.boolean().optional() }, handler: (y, a) => y.deleteScheduled(a.plan_id, a.scheduled_id, { confirm: a.confirm }) },
   // ---- structure
   { name: 'list_categories', description: 'All visible categories with balances and target status (compact).' + UNIT_NOTE, money: true, schema: { plan_id: planId }, handler: (y, a) => y.listCategories(a.plan_id) },
   { name: 'create_category', description: 'Create a category; pass group_name to create its group too.', write: true, schema: { plan_id: planId, name: z.string(), group_id: z.string().optional(), group_name: z.string().optional() }, handler: (y, a) => y.createCategory(a.plan_id, { name: a.name, groupId: a.group_id, groupName: a.group_name }) },
-  { name: 'update_category', description: 'Rename/hide a category or set its target: goal_target (dollars), goal_target_date, goal_frequency (monthly|weekly|yearly), goal_needs_whole_amount. Undoable.', write: true, money: true, schema: { plan_id: planId, category_id: z.string(), name: z.string().optional(), hidden: z.boolean().optional(), goal_target: z.number().nullable().optional(), goal_target_date: z.string().nullable().optional(), goal_frequency: z.enum(['monthly', 'weekly', 'yearly']).nullable().optional(), goal_needs_whole_amount: z.boolean().nullable().optional() }, handler: (y, a) => y.updateCategory(a.plan_id, a.category_id, { name: a.name, hidden: a.hidden, goalTarget: a.goal_target, goalTargetDate: a.goal_target_date, goalFrequency: a.goal_frequency, goalNeedsWholeAmount: a.goal_needs_whole_amount }) },
+  { name: 'update_category', description: 'Rename/hide a category or set its target: goal_target (decimal major units of the budget\'s own currency), goal_target_date, goal_frequency (monthly|weekly|yearly), goal_needs_whole_amount. Undoable.', write: true, money: true, schema: { plan_id: planId, category_id: z.string(), name: z.string().optional(), hidden: z.boolean().optional(), goal_target: z.number().nullable().optional(), goal_target_date: z.string().nullable().optional(), goal_frequency: z.enum(['monthly', 'weekly', 'yearly']).nullable().optional(), goal_needs_whole_amount: z.boolean().nullable().optional() }, handler: (y, a) => y.updateCategory(a.plan_id, a.category_id, { name: a.name, hidden: a.hidden, goalTarget: a.goal_target, goalTargetDate: a.goal_target_date, goalFrequency: a.goal_frequency, goalNeedsWholeAmount: a.goal_needs_whole_amount }) },
   { name: 'assign_budget', description: "Set a category's assigned amount for a month. Requires confirm:true. Undoable.", write: true, money: true, schema: { plan_id: planId, month, category_id: z.string(), amount: dollars('New assigned amount'), reason: z.string().optional().describe('why this assignment is being made — recorded in the local audit journal and echoed back (YNAB has no memo on assignments; this never reaches YNAB)'), confirm: z.boolean().optional() }, handler: (y, a) => y.assignBudget(a.plan_id, a.month, a.category_id, a.amount, a.reason, { confirm: a.confirm }) },
   { name: 'move_money', description: 'Move assigned money between two categories in a month (atomic: rolls back if the second half fails). Requires confirm:true. Undoable.', write: true, money: true, schema: { plan_id: planId, month, from_category_id: z.string(), to_category_id: z.string(), amount: dollars('Amount to move (positive)'), reason: z.string().optional().describe('why this move is being made — recorded in the local audit journal and echoed back (YNAB has no memo on assignments; this never reaches YNAB)'), confirm: z.boolean().optional() }, handler: (y, a) => y.moveMoney(a.plan_id, a.month, a.from_category_id, a.to_category_id, a.amount, a.reason, { confirm: a.confirm }) },
   // ---- payees & accounts

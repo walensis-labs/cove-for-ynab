@@ -15,8 +15,12 @@ const txns = { transactions: [
   { id: 'pend', date: '2026-07-20', amount: -42100, cleared: 'uncleared', approved: false, account_id: 'a1', payee_name: 'Pend', account_name: 'Citi Card', category_id: null, transfer_account_id: null, deleted: false, subtransactions: [] },
 ] }
 
+// CRITICAL 1 fix (currency-symbol review): `last-used` is a YNAB path-param ALIAS, never a real plan
+// `id` — YNAB accepts it directly in `GET /plans/{plan_id}/settings`'s URL, so a mock keyed on "any path
+// ending in /settings" correctly simulates that (no impossible `{ id: 'last-used' }` fixture needed).
 function client() {
   return { request: vi.fn(async (path: string) => {
+    if (path.endsWith('/settings')) return { settings: { currency_format: { iso_code: 'USD', currency_symbol: '$' } } }
     if (path.endsWith('/accounts')) return accounts
     if (path.includes('/months/')) return month
     if (path.endsWith('/transactions')) return txns
@@ -39,6 +43,11 @@ describe('monthClose', () => {
       account: 'Citi Card', workingAsOf: -3241.76, workingAsOfText: '-$3,241.76',
       availableAtMonthEnd: 2662.65, availableAtMonthEndText: '$2,662.65', paymentCategoryId: 'p1',
     })
+    // MUTATION CHECK (CRITICAL 1): the symbol lookup must have hit the alias-aware settings endpoint
+    // with 'last-used' passed straight through — never `/plans` (a `find` over which can never match
+    // an alias, since YNAB never returns one as a plan's `id`).
+    expect(c.request.mock.calls.some(([p]: any[]) => p === '/plans/last-used/settings')).toBe(true)
+    expect(c.request.mock.calls.some(([p]: any[]) => p === '/plans')).toBe(false)
     expect(card.gap).toBe(-579.11) // -3241.76 + 2662.65 — integer milli math, exact
     expect(card.gapText).toBe('-$579.11')
     expect(res.blockers.unapproved.map((t) => t.id)).toEqual(['pend'])
@@ -110,6 +119,7 @@ describe('proposeCoverage', () => {
       { id: 'r1', name: 'Kid Things', category_group_name: 'Just for Fun', hidden: false, deleted: false, internal: false, balance: -348170, goal_type: null, goal_target: null },
     ] } }
     const c = { request: vi.fn(async (path: string) => {
+      if (path.endsWith('/settings')) return { settings: { currency_format: { iso_code: 'USD', currency_symbol: '$' } } }
       if (path.endsWith('/accounts')) return { accounts: [] }
       if (path.includes('/months/')) return noRtaMonth
       if (path.endsWith('/transactions')) return { transactions: [] }
