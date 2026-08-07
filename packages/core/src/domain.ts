@@ -312,11 +312,18 @@ export class Ynab {
   // read here does.
   async listPlans() {
     const data = await this.client.request<any>('/plans')
-    // currencySymbol keeps its historical "$" default for its own public contract (list_plans is an
-    // informational listing, not a *Text companion) — every *Text field elsewhere goes through
-    // #resolveCurrency, which does NOT default, so a plan with no currency data doesn't launder a false
-    // "$" into any other tool's output via this shortcut.
-    return data.plans.map((p: any) => ({ id: p.id, name: p.name, currency: p.currency_format?.iso_code ?? 'USD', currencySymbol: p.currency_format?.currency_symbol ?? '$', lastModified: p.last_modified_on }))
+    // These report null rather than defaulting to USD/"$". The earlier defence — that list_plans is
+    // "informational" and doesn't launder a false "$" into any *Text field — was true about other
+    // tools and beside the point about this one: the model reads list_plans directly, so telling it a
+    // SEK budget's currency is "USD" is a false statement at the source. Same defect class the *Text
+    // work exists to close; unresolved must read as unresolved everywhere.
+    return data.plans.map((p: any) => ({
+      id: p.id,
+      name: p.name,
+      currency: p.currency_format?.iso_code ?? null,
+      currencySymbol: p.currency_format?.currency_symbol ?? null,
+      lastModified: p.last_modified_on,
+    }))
   }
 
   async getMonth(planId: string, month: string) {

@@ -24,9 +24,11 @@ const monthFixture = {
 
 describe('Ynab reads', () => {
   it('lists plans with currency', async () => {
-    const client = fakeClient({ '/plans': () => ({ plans: [{ id: 'p1', name: 'Family', last_modified_on: '2026-07-01T00:00:00Z', currency_format: { iso_code: 'USD' } }] }) })
+    const client = fakeClient({ '/plans': () => ({ plans: [{ id: 'p1', name: 'Family', last_modified_on: '2026-07-01T00:00:00Z', currency_format: { iso_code: 'USD', currency_symbol: '$' } }] }) })
     const y = new Ynab({ client, allowWrites: false })
     const plans = await y.listPlans()
+    // currency_symbol is present here because YNAB's spec requires it whenever currency_format is
+    // non-null; the previous fixture omitted it and the assertion passed only on a fabricated '$'.
     expect(plans).toEqual([{ id: 'p1', name: 'Family', currency: 'USD', currencySymbol: '$', lastModified: '2026-07-01T00:00:00Z' }])
   })
   it('getMonth converts milliunits to dollars everywhere', async () => {

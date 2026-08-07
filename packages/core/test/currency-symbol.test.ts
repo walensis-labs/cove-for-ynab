@@ -572,3 +572,22 @@ describe('currency symbol: 10) getPlanOverview never fabricates a currency, and 
     expect(overview.month.readyToAssignText).toBe('€150.25') // override wins, not the /plans-derived "$"
   })
 })
+
+describe('listPlans reports unresolved currency as null, never a guessed default', () => {
+  // The model reads list_plans directly, so a fabricated "USD"/"$" for a plan whose currency_format
+  // is absent is a false statement at the source — the same defect class every *Text field in this
+  // file exists to close. Unresolved must read as unresolved.
+  it('emits null for both fields when currency_format is missing', async () => {
+    const client = { request: vi.fn(async () => ({ plans: [{ id: 'p1', name: 'Budget', last_modified_on: '2026-08-07' }] })) } as any
+    const [plan] = await new Ynab({ client, allowWrites: false }).listPlans()
+    expect(plan!.currency).toBeNull()
+    expect(plan!.currencySymbol).toBeNull()
+  })
+
+  it('still reports the real values when present', async () => {
+    const client = { request: vi.fn(async () => ({ plans: [{ id: 'p1', name: 'Budget', currency_format: { iso_code: 'SEK', currency_symbol: 'kr' }, last_modified_on: '2026-08-07' }] })) } as any
+    const [plan] = await new Ynab({ client, allowWrites: false }).listPlans()
+    expect(plan!.currency).toBe('SEK')
+    expect(plan!.currencySymbol).toBe('kr')
+  })
+})

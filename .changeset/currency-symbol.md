@@ -86,3 +86,8 @@ budgets: a straight regression from `"$1,500.00"` to `"1,500.00"`.
   accepted and still means "just the symbol, US-style formatting otherwise" (unchanged for existing
   callers). A string-only seam couldn't express a SEK plan's format, so a host caching just the
   symbol reintroduced the `"kr1,500.00"` misformatting IMPORTANT 6 fixed for the live path.
+
+`listPlans()` (the `list_plans` tool) now reports `currency` and `currencySymbol` as **`null`**
+when the plan carries no currency format, instead of defaulting to `"USD"` / `"$"`. The model reads
+that tool's output directly, so a fabricated `"USD"` for a SEK budget was a false statement at the
+source — the same defect the `*Text` work exists to close. Both fields are now `string | null`.
