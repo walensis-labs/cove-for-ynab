@@ -23,10 +23,16 @@ import type { CurrencyFormatOpts } from '../src/money.js'
  *   9. (review round 3, IMPORTANT 1) a cache HIT degrades gracefully too — not just the original
  *      fetcher — so a method that resolves currency twice for the same plan in one Promise.all
  *      (getBudgetHealth, getPlanOverview) never throws
- *  10. (review round 3, IMPORTANT 2) getPlanOverview never fabricates "USD" for an alias id, and costs
- *      one fewer request for a real plan id by seeding the currency cache from /plans directly
+ *  10. (review round 3, IMPORTANT 2) getPlanOverview never fabricates "USD" for an alias id
  *  11. (review round 3, MINOR seam widened) the injectable `currencySymbol` seam accepts a full
  *      CurrencyFormatOpts, not just a bare string, so a host-cached SEK plan renders correctly
+ *  12. (fix/currency-symbol, cache-seeding regression) getPlanOverview no longer seeds its currency
+ *      cache from /plans' currency_format — that entry can legitimately be null or absent for a real
+ *      plan id (PlanSummary.currency_format is optional; CurrencyFormat is `{...} | null` per
+ *      generated/api.d.ts), independent of whether /settings would resolve it. A real plan id with a
+ *      null/absent /plans currency_format still resolves its currency live via /settings, and
+ *      getPlanOverview's four requests (/plans, /accounts, /months/current, /settings) fire fully
+ *      concurrently again — no more awaiting /plans alone first.
  *
  * See packages/core/src/domain.ts's #resolveCurrency docstring for the design.
  */
@@ -467,20 +473,20 @@ describe('currency symbol: 10) getPlanOverview never fabricates a currency, and 
     expect(overview.plan.currency).toBeNull()
   })
 
-  it('a real plan id costs one fewer request than an alias — the cache is seeded from /plans, skipping /settings', async () => {
+  it('a real plan id and an alias id cost the same 4 requests — /settings is always live, never skipped via /plans-seeding', async () => {
     const cReal = { request: vi.fn(async (path: string) => {
       if (path === '/plans') return { plans: [{ id: 'p1', name: 'Family', last_modified_on: '2026-07-01T00:00:00Z', currency_format: { iso_code: 'USD', currency_symbol: '$' } }] }
       if (path === '/plans/p1/months/current') return monthFixture
       if (path === '/plans/p1/accounts') return { accounts: [] }
-      if (path === '/plans/p1/settings') throw new Error('should not be called for a real plan id — /plans already had its currency_format')
+      if (path === '/plans/p1/settings') return settingsOf({ iso_code: 'USD', currency_symbol: '$' })
       throw new Error(`unmocked ${path}`)
     }) } as any
     const yReal = new Ynab({ client: cReal, allowWrites: false })
     const overviewReal: any = await yReal.getPlanOverview('p1')
     expect(overviewReal.plan.currency).toBe('USD')
-    // MUTATION CHECK: exactly 3 requests for a real plan id (/plans, /accounts, /months/current) — a
-    // 4th (/settings) means the cache-seeding optimization regressed.
-    expect(cReal.request.mock.calls).toHaveLength(3)
+    // MUTATION CHECK: exactly 4 requests (/plans, /accounts, /months/current, /settings) — 3 would mean
+    // the cache-seeding shortcut (removed for correctness, see finding 12) crept back in.
+    expect(cReal.request.mock.calls).toHaveLength(4)
 
     const cAlias = { request: vi.fn(async (path: string) => {
       if (path === '/plans') return { plans: [] }
@@ -491,8 +497,67 @@ describe('currency symbol: 10) getPlanOverview never fabricates a currency, and 
     }) } as any
     const yAlias = new Ynab({ client: cAlias, allowWrites: false })
     await yAlias.getPlanOverview('last-used')
-    // The alias path genuinely needs the extra /settings round-trip — only /settings understands aliases.
     expect(cAlias.request.mock.calls).toHaveLength(4)
+  })
+
+  it('all four requests fire concurrently — /plans, /accounts, /months/current, /settings are all dispatched before /plans resolves', async () => {
+    const order: string[] = []
+    let resolvePlans!: (v: unknown) => void
+    const plansPromise = new Promise((res) => { resolvePlans = res })
+    const c = { request: vi.fn((path: string) => {
+      order.push(path)
+      if (path === '/plans') return plansPromise
+      if (path === '/plans/p1/accounts') return Promise.resolve({ accounts: [] })
+      if (path === '/plans/p1/months/current') return Promise.resolve(monthFixture)
+      if (path === '/plans/p1/settings') return Promise.resolve(settingsOf({ iso_code: 'USD', currency_symbol: '$' }))
+      throw new Error(`unmocked ${path}`)
+    }) } as any
+    const y = new Ynab({ client: c, allowWrites: false })
+    const overviewPromise = y.getPlanOverview('p1')
+    // MUTATION CHECK: if /plans were awaited alone before starting the rest (the round-3 sequencing
+    // this fix removes), only '/plans' would be dispatched at this point — accounts/month/settings
+    // wouldn't fire until AFTER /plans resolves (a microtask away). With a single 4-way Promise.all,
+    // request() is invoked for all four synchronously before this line runs, so all four are already
+    // in `order` while /plans is still unresolved.
+    expect(order).toEqual(['/plans', '/plans/p1/accounts', '/plans/p1/months/current', '/plans/p1/settings'])
+    resolvePlans({ plans: [{ id: 'p1', name: 'Family', last_modified_on: '2026-07-01T00:00:00Z', currency_format: { iso_code: 'USD', currency_symbol: '$' } }] })
+    const overview: any = await overviewPromise
+    expect(overview.plan.currency).toBe('USD')
+  })
+
+  it('a real plan id whose /plans entry has currency_format: null still resolves its currency live via /settings', async () => {
+    const c = { request: vi.fn(async (path: string) => {
+      if (path === '/plans') return { plans: [{ id: 'p1', name: 'Family', last_modified_on: '2026-07-01T00:00:00Z', currency_format: null }] }
+      if (path === '/plans/p1/settings') return settingsOf({ iso_code: 'SEK', currency_symbol: 'kr', symbol_first: false, decimal_digits: 2, decimal_separator: ',', group_separator: ' ', display_symbol: true })
+      if (path === '/plans/p1/months/current') return monthFixture
+      if (path === '/plans/p1/accounts') return { accounts: [] }
+      throw new Error(`unmocked ${path}`)
+    }) } as any
+    const y = new Ynab({ client: c, allowWrites: false })
+    const overview: any = await y.getPlanOverview('p1')
+    // MUTATION CHECK: before the fix, the seeding guard's `if (rawPlan && ...)` ran regardless of
+    // whether currency_format was populated, permanently caching `{ symbol: '' }` and never calling
+    // /settings at all — this would be `null`/'150.25' and 0 calls.
+    expect(overview.plan.currency).toBe('SEK')
+    expect(overview.month.readyToAssignText).toBe('150,25 kr')
+    const settingsCalls = c.request.mock.calls.filter(([p]: any[]) => p === '/plans/p1/settings')
+    expect(settingsCalls).toHaveLength(1)
+  })
+
+  it('a real plan id whose /plans entry has currency_format absent entirely still resolves its currency live via /settings', async () => {
+    const c = { request: vi.fn(async (path: string) => {
+      if (path === '/plans') return { plans: [{ id: 'p1', name: 'Family', last_modified_on: '2026-07-01T00:00:00Z' }] } // currency_format key absent
+      if (path === '/plans/p1/settings') return settingsOf({ iso_code: 'SEK', currency_symbol: 'kr', symbol_first: false, decimal_digits: 2, decimal_separator: ',', group_separator: ' ', display_symbol: true })
+      if (path === '/plans/p1/months/current') return monthFixture
+      if (path === '/plans/p1/accounts') return { accounts: [] }
+      throw new Error(`unmocked ${path}`)
+    }) } as any
+    const y = new Ynab({ client: c, allowWrites: false })
+    const overview: any = await y.getPlanOverview('p1')
+    expect(overview.plan.currency).toBe('SEK')
+    expect(overview.month.readyToAssignText).toBe('150,25 kr')
+    const settingsCalls = c.request.mock.calls.filter(([p]: any[]) => p === '/plans/p1/settings')
+    expect(settingsCalls).toHaveLength(1)
   })
 
   it('a configured currencySymbol override still wins over the /plans-seeding shortcut', async () => {

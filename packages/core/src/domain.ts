@@ -366,38 +366,42 @@ export class Ynab {
   }
 
   async getPlanOverview(planId: string) {
-    // IMPORTANT 2 fix (currency-symbol review round 3): fetches the raw /plans payload directly (not
-    // via listPlans(), whose mapped shape drops currency_format) so the matched plan's own
-    // currency_format is available both for the ISO-code fallback below and to seed #resolveCurrency's
-    // cache — see the seeding block below this fetch.
-    const plansData = await this.client.request<any>('/plans')
-    const rawPlan = (plansData.plans as any[]).find((p) => p.id === planId)
-    // Seeds #resolveCurrency's cache from the raw /plans entry for a matched REAL plan id — /plans
-    // already carries the exact same currency_format object GET /settings returns, so a real plan id
-    // never needs that extra round-trip (restores the pre-regression 3-call cost: /plans,
-    // /plans/{id}/accounts, /plans/{id}/months/current). `find` can only miss when planId is an alias
-    // ('last-used'/'default' — YNAB never returns an alias as a plan's own `id`, see #resolveCurrency's
-    // docstring), in which case #resolveCurrency falls through to its own /settings fetch below, the
-    // only endpoint that understands aliases. Skipped when a currencySymbolOverride is configured, so a
-    // host's injected seam still wins over this file's own /plans read, and skipped if some other call
-    // already populated the cache for this planId (idempotent).
-    if (rawPlan && this.#currencySymbolOverride === undefined && !this.#currencyCache.has(planId)) {
-      const cf = rawPlan.currency_format
-      this.#currencyCache.set(planId, Promise.resolve({
-        symbol: cf?.currency_symbol ?? '',
-        decimals: cf?.decimal_digits,
-        symbolFirst: cf?.symbol_first,
-        decimalSeparator: cf?.decimal_separator,
-        groupSeparator: cf?.group_separator,
-        displaySymbol: cf?.display_symbol,
-        isoCode: cf?.iso_code,
-      }))
-    }
-    const [accountsData, month, fmt] = await Promise.all([
+    // Fix report (fix/currency-symbol, cache-seeding regression): this used to await /plans alone
+    // first and seed #resolveCurrency's cache straight from its currency_format entry for a matched
+    // REAL plan id, to save the one extra /settings round-trip #resolveCurrency would otherwise make.
+    // Removed. Per this repo's own generated types (generated/api.d.ts: CurrencyFormat is `{...} |
+    // null`, and PlanSummary.currency_format is OPTIONAL), a real plan's /plans entry can legitimately
+    // have currency_format null or absent — independent of whether /plans/{id}/settings would resolve
+    // it. The seeding guard only checked `if (rawPlan && ...)`, never whether currency_format was
+    // actually populated, so that case seeded a fully-degraded `{ symbol: '' }` and PERMANENTLY cached
+    // it for this instance's lifetime — the live /settings fetch that would have resolved it correctly
+    // was never attempted. That's the same defect class this whole review chain has been closing (a
+    // resolvable currency rendering as unresolved), just moved from alias ids to real ids. A truthiness
+    // guard on currency_format would fix the correctness bug but reintroduces the sequencing problem
+    // below (the seed has to win a race against getMonth's internal #resolveCurrency call, which
+    // requires awaiting /plans alone first — see next paragraph). Given the seeding only ever saved one
+    // request out of roughly forty in a realistic session, and it has now cost both a correctness
+    // regression and this method's parallelism on its first outing, it's not worth keeping under either
+    // guard. #resolveCurrency now does its normal live /settings fetch on every path, alias or not —
+    // deduped per instance as always (see #resolveCurrency's docstring), so a real plan id still costs
+    // only one extra request beyond the unavoidable three (/plans, /accounts, /months/current), same as
+    // an alias id.
+    //
+    // Restoring the seeding also removes the reason /plans had to be awaited on its own before the rest:
+    // the seed needed to land in the cache before getMonth's internal #resolveCurrency call raced it, so
+    // the round-3 rewrite split this into `await /plans` then a second `Promise.all` for
+    // accounts/month/fmt — an extra full YNAB round-trip of latency on the "Start here" tool. With no
+    // data dependency between them, all four fire concurrently again, as they did before that rewrite.
+    const [plansData, accountsData, month, fmt] = await Promise.all([
+      this.client.request<any>('/plans'),
       this.client.request<any>(`/plans/${planId}/accounts`),
       this.getMonth(planId, 'current'),
       this.#resolveCurrency(planId),
     ])
+    // fetches the raw /plans payload directly (not via listPlans(), whose mapped shape drops
+    // currency_format) so the matched plan's own currency_format is available for the ISO-code
+    // fallback below.
+    const rawPlan = (plansData.plans as any[]).find((p) => p.id === planId)
     // IMPORTANT 2 fix (currency-symbol review round 3): plan metadata used to fall back to a fabricated
     // `{ name: '(current plan)', currency: 'USD' }` whenever `find` missed — which, for `currency`, is
     // EVERY alias call (`rawPlan` above can never match one), leaving a confident, unverified "USD" as

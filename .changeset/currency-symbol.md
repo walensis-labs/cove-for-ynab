@@ -33,11 +33,15 @@ budgets: a straight regression from `"$1,500.00"` to `"1,500.00"`.
   "not one per tool call within it" (this changeset's prior wording) overstated the savings: expect
   at most one extra `/settings` request per tool call that emits money `*Text`, same as before.
   `list_plans`/`listPlans()` is a separate, un-memoized call (see below) and no longer shares this
-  cache. `getPlanOverview` costs one more request than it used to for an *alias* `plan_id`
-  (`/plans` for plan metadata, `/plans/{id}/settings` for the format, since only `/settings`
-  understands aliases); for a real `plan_id` a later fix (below) seeds the format cache from the
-  `/plans` payload directly, so the cost is unchanged from before this branch.
-  **A follow-up worth considering:** a Durable-Object- or KV-backed format cache keyed by planId,
+  cache. `getPlanOverview` now costs one more request than it used to, for both a real and an alias
+  `plan_id` (`/plans` for plan metadata, `/plans/{id}/settings` for the format) — an earlier draft of
+  this fix seeded the format cache from the `/plans` payload for a real plan id to avoid that extra
+  request, but `/plans`' `currency_format` is optional and can be `null` even for a real plan whose
+  `/settings` would resolve it; seeding from it unconditionally could permanently cache a
+  fully-degraded symbol-less format for an otherwise-resolvable plan. Removed for correctness — the
+  format is always resolved live, and all four of `getPlanOverview`'s requests
+  (`/plans`, `/plans/{id}/accounts`, `/plans/{id}/months/current`, `/plans/{id}/settings`) fire
+  concurrently. **A follow-up worth considering:** a Durable-Object- or KV-backed format cache keyed by planId,
   shared across requests, would collapse this to zero extra `/settings` calls after the first
   request per plan. `Ynab`'s constructor now accepts an injectable `currencySymbol` seam
   (`string | (planId) => Promise<string | undefined>`) for exactly this — a host can wire in its own
@@ -72,11 +76,11 @@ budgets: a straight regression from `"$1,500.00"` to `"1,500.00"`.
   companion uses, falling back to `null` — never a guessed code — if it can't be resolved at all.
   This is the same defect CRITICAL 1 fixed for the symbol, closed for the ISO code: previously an
   alias call's `plan.currency` was always `"USD"` regardless of the budget's real currency.
-- `get_plan_overview` also got cheaper again for a real (non-alias) `plan_id`: it now seeds the
-  currency-format cache from the `/plans` payload it already fetches for plan metadata (which
-  carries the same `currency_format` object `/settings` returns), skipping the extra `/settings`
-  round-trip — back to 3 requests instead of 4. Alias `plan_id`s still cost 4, since only
-  `/settings` understands them.
+- `get_plan_overview` makes 4 requests regardless of whether `plan_id` is real or an alias
+  (`/plans`, `/plans/{id}/accounts`, `/plans/{id}/months/current`, `/plans/{id}/settings`) — one more
+  than the pre-regression baseline of 3, in exchange for the format always being resolved live and
+  correctly rather than possibly seeded from a `/plans` payload that can legitimately omit it. All
+  four requests fire concurrently, so this costs one extra round-trip of data, not of latency.
 - The injectable `currencySymbol` constructor seam now accepts a full `CurrencyFormatOpts`
   (decimals/separators/symbol position/`display_symbol`), not just a bare string — a string is still
   accepted and still means "just the symbol, US-style formatting otherwise" (unchanged for existing
