@@ -8,8 +8,8 @@
   },
   "scripts": {
     "build": "pnpm -r build",
-    "test": "pnpm -r test",
-    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -F @walensis/cove-core build && pnpm -r test",
+    "typecheck": "pnpm -F @walensis/cove-core build && pnpm -r typecheck",
     "smoke": "pnpm -F @walensis/cove-core build && tsx scripts/smoke.ts",
     "diagnose": "pnpm -F @walensis/cove-core build && tsx scripts/diagnose-category-history.ts",
     "validate:fixtures": "pnpm -F @walensis/cove-core build && tsx scripts/validate-fixtures.ts"

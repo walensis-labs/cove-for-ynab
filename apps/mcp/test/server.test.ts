@@ -87,7 +87,18 @@ describe('server', () => {
     const res: any = await client.callTool({ name: 'credit_card_float_history', arguments: { plan_id: 'p1', payment_category_id: 'pay-cat', card_account_id: 'card-acct', since_month: '2026-07', until_month: '2026-07' } })
     expect(res.isError).toBeUndefined()
     const body = JSON.parse(res.content[0].text)
-    expect(body.points).toEqual([{ month: '2026-07', owed: 100, available: 100, gap: 0, changed: false, gapChange: 0, direction: 'flat' }])
+    // Every money field carries a formatted companion so a model quotes rather than re-converts —
+    // asserting the whole shape (not a subset) is deliberate: it fails loudly if a money field is
+    // ever added without one, which is the defect this pairing exists to prevent.
+    expect(body.points).toEqual([{
+      month: '2026-07',
+      owed: 100, owedText: '$100.00',
+      available: 100, availableText: '$100.00',
+      gap: 0, gapText: '$0.00',
+      changed: false,
+      gapChange: 0, gapChangeText: '$0.00',
+      direction: 'flat',
+    }])
     expect(body.skippedMonths).toEqual([])
   })
   it('backfill_ledger writes backfill records and returns the discovery summary', async () => {
