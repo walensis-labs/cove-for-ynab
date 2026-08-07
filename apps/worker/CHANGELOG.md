@@ -1,5 +1,13 @@
 # @walensis/mcp-for-ynab-worker
 
+## 0.1.6
+
+### Patch Changes
+
+- Updated dependencies [d4b0936]
+  - @walensis/cove-core@0.5.0
+  - @walensis/cove-mcp@0.6.0
+
 ## 0.1.5
 
 ### Patch Changes
