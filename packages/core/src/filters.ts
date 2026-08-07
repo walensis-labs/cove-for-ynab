@@ -34,7 +34,11 @@ export function applyFilters(txns: Txn[], f: TxnFilters): Txn[] {
   })
 }
 
-export function aggregateTxns(txns: Txn[], by: 'category' | 'payee' | 'month'): { key: string; total: number; totalText: string; count: number }[] {
+// `symbol` defaults to '$' so this generic aggregator stays backward-compatible for callers with no
+// currency context (matches formatDollars' own default) — every Ynab-instance call site in domain.ts
+// must pass the plan's *verified* symbol explicitly instead of relying on this default. See NOTE 7 in
+// domain.ts's truthful-output review for why an unverified default is exactly the bug being fixed.
+export function aggregateTxns(txns: Txn[], by: 'category' | 'payee' | 'month', symbol = '$'): { key: string; total: number; totalText: string; count: number }[] {
   const groups = new Map<string, { total: number; count: number }>()
   for (const t of txns) {
     const key = by === 'month' ? t.date.slice(0, 7) : (by === 'category' ? t.categoryName : t.payeeName) ?? '(none)'
@@ -43,6 +47,6 @@ export function aggregateTxns(txns: Txn[], by: 'category' | 'payee' | 'month'): 
     g.count++
     groups.set(key, g)
   }
-  const rows = [...groups.entries()].map(([key, v]) => ({ key, total: v.total, totalText: formatDollars(v.total), count: v.count }))
+  const rows = [...groups.entries()].map(([key, v]) => ({ key, total: v.total, totalText: formatDollars(v.total, { symbol }), count: v.count }))
   return by === 'month' ? rows.sort((a, b) => a.key.localeCompare(b.key)) : rows.sort((a, b) => a.total - b.total)
 }

@@ -78,6 +78,9 @@ describe('server', () => {
   })
   it('credit_card_float_history wires both ids to the right endpoints', async () => {
     const fake = { request: vi.fn(async (path: string) => {
+      // fix/currency-symbol: *Text now resolves the plan's real symbol via one /plans fetch instead
+      // of defaulting to "$" — a resolvable USD plan keeps this fixture's '$'-prefixed assertions.
+      if (path === '/plans') return { plans: [{ id: 'p1', name: 'Family', last_modified_on: '2026-07-01T00:00:00Z', currency_format: { iso_code: 'USD', currency_symbol: '$' } }] }
       if (path.includes('/categories/')) { expect(path).toMatch(/\/categories\/pay-cat$/); return { category: { id: 'pay-cat', name: 'Visa', budgeted: 0, activity: 0, balance: 100000 } } }
       if (path.endsWith('/accounts/card-acct')) return { account: { id: 'card-acct', name: 'Visa', balance: -100000 } }
       if (path.endsWith('/accounts/card-acct/transactions')) return { transactions: [] }

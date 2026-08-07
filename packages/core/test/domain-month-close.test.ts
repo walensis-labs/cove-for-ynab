@@ -17,6 +17,10 @@ const txns = { transactions: [
 
 function client() {
   return { request: vi.fn(async (path: string) => {
+    // Currency-symbol threading (fix/currency-symbol): monthClose/proposeCoverage now resolve the
+    // plan's real symbol via one /plans fetch before formatting; a resolvable USD plan keeps this
+    // fixture's historical '$'-prefixed assertions unchanged.
+    if (path === '/plans') return { plans: [{ id: 'last-used', name: 'Family', last_modified_on: '2026-07-01T00:00:00Z', currency_format: { iso_code: 'USD', currency_symbol: '$' } }] }
     if (path.endsWith('/accounts')) return accounts
     if (path.includes('/months/')) return month
     if (path.endsWith('/transactions')) return txns
@@ -110,6 +114,7 @@ describe('proposeCoverage', () => {
       { id: 'r1', name: 'Kid Things', category_group_name: 'Just for Fun', hidden: false, deleted: false, internal: false, balance: -348170, goal_type: null, goal_target: null },
     ] } }
     const c = { request: vi.fn(async (path: string) => {
+      if (path === '/plans') return { plans: [{ id: 'last-used', name: 'Family', last_modified_on: '2026-07-01T00:00:00Z', currency_format: { iso_code: 'USD', currency_symbol: '$' } }] }
       if (path.endsWith('/accounts')) return { accounts: [] }
       if (path.includes('/months/')) return noRtaMonth
       if (path.endsWith('/transactions')) return { transactions: [] }

@@ -23,7 +23,7 @@ const MONEY_TXN_FIELDS = new Set<keyof Txn>(['amount'])
 // reachable via explicit `fields` selection (the `fields` branch below never consults this set).
 const DEFAULT_OMIT_TXN_FIELDS = new Set<keyof Txn>(['importId'])
 
-function toEvidenceComponent(c: AttributionComponent) {
+function toEvidenceComponent(c: AttributionComponent, symbol: string) {
   const { cause, amountMilli, evidence } = c
   const amount = milliToDollars(amountMilli)
   const assigned = evidence.assignedMilli !== undefined ? milliToDollars(evidence.assignedMilli) : undefined
@@ -31,13 +31,13 @@ function toEvidenceComponent(c: AttributionComponent) {
   const residual = evidence.residualMilli !== undefined ? milliToDollars(evidence.residualMilli) : undefined
   return {
     cause,
-    amount, amountText: formatDollars(amount),
-    ...(assigned !== undefined ? { assigned, assignedText: formatDollars(assigned) } : {}),
-    ...(priorRed !== undefined ? { priorRed, priorRedText: formatDollars(priorRed) } : {}),
-    ...(residual !== undefined ? { residual, residualText: formatDollars(residual) } : {}),
+    amount, amountText: formatDollars(amount, { symbol }),
+    ...(assigned !== undefined ? { assigned, assignedText: formatDollars(assigned, { symbol }) } : {}),
+    ...(priorRed !== undefined ? { priorRed, priorRedText: formatDollars(priorRed, { symbol }) } : {}),
+    ...(residual !== undefined ? { residual, residualText: formatDollars(residual, { symbol }) } : {}),
     ...(evidence.txns !== undefined ? { txns: evidence.txns.map((t) => {
       const txnAmount = milliToDollars(t.amountMilli)
-      return { id: t.id, date: t.date, amount: txnAmount, amountText: formatDollars(txnAmount) }
+      return { id: t.id, date: t.date, amount: txnAmount, amountText: formatDollars(txnAmount, { symbol }) }
     }) } : {}),
   }
 }
@@ -87,7 +87,10 @@ export interface NewTxn {
   subtransactions?: { amount: number; categoryId?: string; memo?: string }[]
 }
 
-function mapCategory(c: any): CategorySnapshot {
+// `symbol` is a required param (mapCategory is internal-only, never exported) — forcing every call
+// site to pass the plan's resolved symbol explicitly, so a forgotten arg fails to compile instead of
+// silently reintroducing the hardcoded-"$" bug this function used to have.
+function mapCategory(c: any, symbol: string): CategorySnapshot {
   const assigned = d(c.budgeted)
   const activity = d(c.activity)
   const available = d(c.balance)
@@ -95,20 +98,23 @@ function mapCategory(c: any): CategorySnapshot {
   const goalUnderFunded = c.goal_under_funded == null ? null : d(c.goal_under_funded)
   return {
     id: c.id, name: c.name, group: c.category_group_name ?? '', hidden: !!c.hidden,
-    assigned, assignedText: formatDollars(assigned),
-    activity, activityText: formatDollars(activity),
-    available, availableText: formatDollars(available),
+    assigned, assignedText: formatDollars(assigned, { symbol }),
+    activity, activityText: formatDollars(activity, { symbol }),
+    available, availableText: formatDollars(available, { symbol }),
     goalType: c.goal_type ?? null,
-    goalTarget, goalTargetText: goalTarget === null ? null : formatDollars(goalTarget),
-    goalUnderFunded, goalUnderFundedText: goalUnderFunded === null ? null : formatDollars(goalUnderFunded),
+    goalTarget, goalTargetText: goalTarget === null ? null : formatDollars(goalTarget, { symbol }),
+    goalUnderFunded, goalUnderFundedText: goalUnderFunded === null ? null : formatDollars(goalUnderFunded, { symbol }),
     goalPercentageComplete: c.goal_percentage_complete ?? null,
   }
 }
 
-export function mapTxn(t: any): Txn {
+// `symbol` defaults to '$': mapTxn is exported (part of @walensis/cove-core's public surface) and a
+// caller with no plan/currency context gets the same generic-USD-formatter behavior as formatDollars
+// itself. Every internal Ynab method call site below passes the plan's verified symbol explicitly.
+export function mapTxn(t: any, symbol = '$'): Txn {
   const amount = d(t.amount)
   return {
-    id: t.id, date: t.date, amount, amountText: formatDollars(amount),
+    id: t.id, date: t.date, amount, amountText: formatDollars(amount, { symbol }),
     payeeName: t.payee_name ?? null, payeeId: t.payee_id ?? null,
     categoryName: t.category_name ?? null, categoryId: t.category_id ?? null,
     accountName: t.account_name ?? '', accountId: t.account_id,
@@ -118,7 +124,7 @@ export function mapTxn(t: any): Txn {
     ...(t.subtransactions?.length
       ? { subtransactions: t.subtransactions.filter((s: any) => !s.deleted).map((s: any) => {
           const subAmount = d(s.amount)
-          return { amount: subAmount, amountText: formatDollars(subAmount), categoryName: s.category_name ?? null, memo: s.memo ?? null }
+          return { amount: subAmount, amountText: formatDollars(subAmount, { symbol }), categoryName: s.category_name ?? null, memo: s.memo ?? null }
         }) }
       : {}),
   }
@@ -139,11 +145,11 @@ const NOT_REVERSIBLE = "This can't be reversed — the YNAB API has no way to de
  * old values, not the ones just written. Only fields actually present in `update` are described;
  * a field the caller never touched has no "back to X" clause.
  */
-function txnRevertClauses(prior: Txn, update: Record<string, unknown>): string[] {
+function txnRevertClauses(prior: Txn, update: Record<string, unknown>, symbol: string): string[] {
   const clauses: string[] = []
   if (update.categoryId !== undefined) clauses.push(`category back to ${prior.categoryName ?? '(uncategorized)'}`)
   if (update.payeeId !== undefined || update.payeeName !== undefined) clauses.push(`payee back to ${prior.payeeName ?? '(no payee)'}`)
-  if (update.amount !== undefined) clauses.push(`amount back to ${formatDollars(prior.amount)}`)
+  if (update.amount !== undefined) clauses.push(`amount back to ${formatDollars(prior.amount, { symbol })}`)
   if (update.memo !== undefined) clauses.push(`memo back to ${prior.memo ? JSON.stringify(prior.memo) : '(empty)'}`)
   if (update.cleared !== undefined) clauses.push(`cleared status back to ${prior.cleared}`)
   if (update.approved !== undefined) clauses.push(`approved back to ${prior.approved}`)
@@ -166,31 +172,31 @@ const CATEGORY_FIELD_LABEL: Record<string, string> = {
  * every field stays optional per MonthCloseRecord's additive-only contract (pre-existing D1 rows without
  * these fields must still deserialize).
  */
-function withMoneyText(record: Omit<MonthCloseRecord, 'id' | 'recordedAt'>): Omit<MonthCloseRecord, 'id' | 'recordedAt'> {
+function withMoneyText(record: Omit<MonthCloseRecord, 'id' | 'recordedAt'>, symbol: string): Omit<MonthCloseRecord, 'id' | 'recordedAt'> {
   return {
     ...record,
     perCard: record.perCard.map((c) => ({
       ...c,
-      workingAsOfText: c.workingAsOfText ?? formatDollars(c.workingAsOf),
-      clearedAsOfText: c.clearedAsOfText ?? formatDollars(c.clearedAsOf),
-      availableAtMonthEndText: c.availableAtMonthEndText ?? formatDollars(c.availableAtMonthEnd),
-      gapText: c.gapText ?? formatDollars(c.gap),
+      workingAsOfText: c.workingAsOfText ?? formatDollars(c.workingAsOf, { symbol }),
+      clearedAsOfText: c.clearedAsOfText ?? formatDollars(c.clearedAsOf, { symbol }),
+      availableAtMonthEndText: c.availableAtMonthEndText ?? formatDollars(c.availableAtMonthEnd, { symbol }),
+      gapText: c.gapText ?? formatDollars(c.gap, { symbol }),
     })),
-    ...(record.causes ? { causes: record.causes.map((c) => ({ ...c, changeText: c.changeText ?? formatDollars(c.change) })) } : {}),
-    ...(record.moves ? { moves: record.moves.map((m) => ({ ...m, amountText: m.amountText ?? formatDollars(m.amount) })) } : {}),
-    ...(record.buffer !== undefined ? { bufferText: record.bufferText ?? formatDollars(record.buffer) } : {}),
+    ...(record.causes ? { causes: record.causes.map((c) => ({ ...c, changeText: c.changeText ?? formatDollars(c.change, { symbol }) })) } : {}),
+    ...(record.moves ? { moves: record.moves.map((m) => ({ ...m, amountText: m.amountText ?? formatDollars(m.amount, { symbol }) })) } : {}),
+    ...(record.buffer !== undefined ? { bufferText: record.bufferText ?? formatDollars(record.buffer, { symbol }) } : {}),
   }
 }
 
 /** Plain-language "field back to prior value" clauses for updateCategory's inverse, keyed off the
  * API-wire `body` that was just sent (so only fields the caller actually changed are described). */
-function categoryInverseClauses(body: Record<string, unknown>, prior: any): string {
+function categoryInverseClauses(body: Record<string, unknown>, prior: any, symbol: string): string {
   const keys = Object.keys(body)
   if (keys.length === 0) return 'nothing — no fields differed from their prior values'
   return keys.map((k) => {
     const label = CATEGORY_FIELD_LABEL[k] ?? k
     const priorVal = prior[k] ?? null
-    const display = k === 'goal_target' ? (priorVal == null ? 'none' : formatDollars(milliToDollars(priorVal as number))) : priorVal == null ? '(none)' : String(priorVal)
+    const display = k === 'goal_target' ? (priorVal == null ? 'none' : formatDollars(milliToDollars(priorVal as number), { symbol })) : priorVal == null ? '(none)' : String(priorVal)
     return `${label} back to ${display}`
   }).join(', ')
 }
@@ -210,29 +216,69 @@ export class Ynab {
 
   assertWrites(): void { if (!this.allowWrites) throw new WriteDisabledError(this.writeDisabledHint) }
 
+  // Raw /plans response, memoized for the lifetime of this Ynab instance. Ynab instances are
+  // constructed PER REQUEST in the Workers deployments (see #resolveSymbol below) so this cache does
+  // NOT survive across requests — it only collapses the N formatted-money call sites within a single
+  // request down to at most one extra /plans fetch, which is what keeps a request like getPlanOverview
+  // (already fetching accounts + month + plans) from spending additional YNAB rate-limit budget just to
+  // label its numbers correctly.
+  #plansRaw?: Promise<any[]>
+  #fetchPlansRaw(): Promise<any[]> {
+    if (!this.#plansRaw) this.#plansRaw = this.client.request<any>('/plans').then((data: any) => data.plans)
+    return this.#plansRaw
+  }
+
+  /**
+   * NOTE 7 follow-up (truthful-output review): resolves planId's real currency symbol, verified
+   * straight from YNAB's `currency_format.currency_symbol` — this NEVER defaults to "$". Deliberately
+   * does not reuse listPlans()'s mapped `currencySymbol` field, which still defaults missing data to
+   * "$" for that method's own (pre-existing, unrelated) public contract; reusing it here would launder
+   * the exact bug this function exists to close. Any failure — plan not found, offline, malformed
+   * response — resolves to `undefined` rather than throwing, so a symbol-lookup problem degrades to
+   * currency-neutral output instead of failing the whole operation.
+   */
+  async #resolveSymbol(planId: string): Promise<string | undefined> {
+    try {
+      const plans = await this.#fetchPlansRaw()
+      return plans.find((p: any) => p.id === planId)?.currency_format?.currency_symbol
+    } catch {
+      return undefined
+    }
+  }
+
   async listPlans() {
-    const data = await this.client.request<any>('/plans')
-    // currencySymbol is additive: `currency` (the ISO code) is unchanged for existing callers.
-    // Lets getPlanOverview (which already has the plan in hand) format money in the plan's real
-    // symbol instead of a hardcoded "$" — see NOTE 7 in the truthful-output review.
-    return data.plans.map((p: any) => ({ id: p.id, name: p.name, currency: p.currency_format?.iso_code ?? 'USD', currencySymbol: p.currency_format?.currency_symbol ?? '$', lastModified: p.last_modified_on }))
+    const plans = await this.#fetchPlansRaw()
+    // currencySymbol is additive: `currency` (the ISO code) is unchanged for existing callers. This
+    // field keeps its historical "$" default for its own public contract (list_plans is an informational
+    // listing, not a *Text companion) — internal *Text formatting below never reads this field; it goes
+    // through #resolveSymbol, which does NOT default, so a plan with no currency data doesn't launder a
+    // false "$" into every other tool's output via this shortcut.
+    return plans.map((p: any) => ({ id: p.id, name: p.name, currency: p.currency_format?.iso_code ?? 'USD', currencySymbol: p.currency_format?.currency_symbol ?? '$', lastModified: p.last_modified_on }))
   }
 
   async getMonth(planId: string, month: string) {
-    const data = await this.client.request<any>(`/plans/${planId}/months/${month}`)
+    const [data, symbol] = await Promise.all([
+      this.client.request<any>(`/plans/${planId}/months/${month}`),
+      this.#resolveSymbol(planId),
+    ])
+    const sym = symbol ?? ''
     const m = data.month
     const readyToAssign = d(m.to_be_budgeted)
     return {
-      month: m.month, readyToAssign, readyToAssignText: formatDollars(readyToAssign), ageOfMoney: m.age_of_money ?? null,
-      categories: m.categories.filter((c: any) => !c.deleted).map(mapCategory),
+      month: m.month, readyToAssign, readyToAssignText: formatDollars(readyToAssign, { symbol: sym }), ageOfMoney: m.age_of_money ?? null,
+      categories: m.categories.filter((c: any) => !c.deleted).map((c: any) => mapCategory(c, sym)),
     }
   }
 
   async listCategories(planId: string): Promise<CategorySnapshot[]> {
-    const data = await this.client.request<any>(`/plans/${planId}/categories`)
+    const [data, symbol] = await Promise.all([
+      this.client.request<any>(`/plans/${planId}/categories`),
+      this.#resolveSymbol(planId),
+    ])
+    const sym = symbol ?? ''
     return data.category_groups
       .filter((g: any) => !g.deleted && !g.hidden)
-      .flatMap((g: any) => g.categories.filter((c: any) => !c.deleted).map((c: any) => mapCategory({ ...c, category_group_name: g.name })))
+      .flatMap((g: any) => g.categories.filter((c: any) => !c.deleted).map((c: any) => mapCategory({ ...c, category_group_name: g.name }, sym)))
   }
 
   async listPayees(planId: string) {
@@ -245,29 +291,34 @@ export class Ynab {
   }
 
   async listScheduled(planId: string): Promise<ScheduledSnapshot[]> {
-    const data = await this.client.request<any>(`/plans/${planId}/scheduled_transactions`)
+    const [data, symbol] = await Promise.all([
+      this.client.request<any>(`/plans/${planId}/scheduled_transactions`),
+      this.#resolveSymbol(planId),
+    ])
+    const sym = symbol ?? ''
     return data.scheduled_transactions.filter((s: any) => !s.deleted).map((s: any) => {
       const amount = d(s.amount)
       return {
-        id: s.id, dateNext: s.date_next, frequency: s.frequency, amount, amountText: formatDollars(amount),
+        id: s.id, dateNext: s.date_next, frequency: s.frequency, amount, amountText: formatDollars(amount, { symbol: sym }),
         payeeName: s.payee_name ?? null, categoryName: s.category_name ?? null, memo: s.memo ?? null,
       }
     })
   }
 
   async getPlanOverview(planId: string) {
-    const [plans, accountsData, month] = await Promise.all([
+    const [plans, accountsData, month, resolvedSymbol] = await Promise.all([
       this.listPlans(),
       this.client.request<any>(`/plans/${planId}/accounts`),
       this.getMonth(planId, 'current'),
+      this.#resolveSymbol(planId),
     ])
-    const plan = plans.find((p: any) => p.id === planId) ?? { id: planId, name: '(current plan)', currency: 'USD', currencySymbol: '$' }
-    // NOTE 7 (truthful-output review): the plan's real currency is already in hand here, so every
-    // *Text this method emits uses it — a EUR budget must not get a confident, wrong "$" in a field
-    // we're telling the model to quote verbatim. Money computed OUTSIDE this method (e.g. individual
-    // category *Text from getMonth/mapCategory) still hardcodes "$"; threading currency through every
-    // emitter in the codebase is a bigger change than this task — see the task report for the full list.
-    const symbol = plan.currencySymbol ?? '$'
+    const plan = plans.find((p: any) => p.id === planId) ?? { id: planId, name: '(current plan)', currency: 'USD' }
+    // NOTE 7 (truthful-output review, closed out): every *Text this method emits uses the plan's real,
+    // VERIFIED currency symbol — resolved via #resolveSymbol, never via listPlans()'s `currencySymbol`
+    // field (which still defaults to "$" for its own unrelated public contract, see #resolveSymbol's
+    // docstring). A EUR budget must not get a confident, wrong "$" in a field we're telling the model
+    // to quote verbatim; an unresolvable symbol renders currency-neutral (no symbol) instead.
+    const symbol = resolvedSymbol ?? ''
     const accounts = accountsData.accounts.filter((a: any) => !a.deleted && !a.closed).map((a: any) => {
       const balance = d(a.balance), cleared = d(a.cleared_balance), uncleared = d(a.uncleared_balance)
       return {
@@ -310,13 +361,17 @@ export class Ynab {
     const explicit = opts.sinceDate !== undefined
     const sub = [opts.accountId && `accounts/${opts.accountId}`, opts.categoryId && `categories/${opts.categoryId}`, opts.payeeId && `payees/${opts.payeeId}`].filter(Boolean)
     const path = sub.length === 1 ? `/plans/${planId}/${sub[0]}/transactions` : `/plans/${planId}/transactions`
-    const data = await this.client.request<any>(path, { query: { since_date: sinceDate, until_date: opts.untilDate, type: opts.unapprovedOnly ? 'unapproved' : opts.unclearedOnly ? 'uncleared' : undefined } })
-    const all = applyFilters(data.transactions.filter((t: any) => !t.deleted).map(mapTxn), { ...opts, sinceDate, ...(sub.length === 1 ? { accountId: undefined, categoryId: undefined, payeeId: undefined } : {}) } as any)
+    const [data, symbol] = await Promise.all([
+      this.client.request<any>(path, { query: { since_date: sinceDate, until_date: opts.untilDate, type: opts.unapprovedOnly ? 'unapproved' : opts.unclearedOnly ? 'uncleared' : undefined } }),
+      this.#resolveSymbol(planId),
+    ])
+    const sym = symbol ?? ''
+    const all = applyFilters(data.transactions.filter((t: any) => !t.deleted).map((t: any) => mapTxn(t, sym)), { ...opts, sinceDate, ...(sub.length === 1 ? { accountId: undefined, categoryId: undefined, payeeId: undefined } : {}) } as any)
     const effectiveWindow = {
       sinceDate, untilDate: opts.untilDate ?? null,
       note: explicit ? `Window: ${sinceDate} → ${opts.untilDate ?? 'today'}.` : `No since_date given — the YNAB API defaults to the last 365 days (${sinceDate} → today). Pass since_date for older history.`,
     }
-    if (opts.aggregate) return { effectiveWindow, total: all.length, aggregate: aggregateTxns(all, opts.aggregate) }
+    if (opts.aggregate) return { effectiveWindow, total: all.length, aggregate: aggregateTxns(all, opts.aggregate, sym) }
     // The API returns ascending date order; newest-first is the useful default for "recent" questions.
     all.sort((a, b) => (opts.sort === 'date_asc' ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date)))
     const limit = Math.min(opts.limit ?? 25, 200)
@@ -338,8 +393,11 @@ export class Ynab {
   }
 
   async getTransaction(planId: string, id: string): Promise<Txn> {
-    const data = await this.client.request<any>(`/plans/${planId}/transactions/${id}`)
-    return mapTxn(data.transaction)
+    const [data, symbol] = await Promise.all([
+      this.client.request<any>(`/plans/${planId}/transactions/${id}`),
+      this.#resolveSymbol(planId),
+    ])
+    return mapTxn(data.transaction, symbol ?? '')
   }
 
   #toApiTxn(t: any): any {
@@ -413,8 +471,9 @@ export class Ynab {
     }) }]
     // Plain-language inverse for the hosted tier (no undo journal there — the conversation carries
     // this instead). Built from `prior`, fetched above BEFORE the write below.
+    const symbol = (await this.#resolveSymbol(planId)) ?? ''
     const rowSummaries = updates.map((u, i) => {
-      const clauses = txnRevertClauses(prior[i]!, u as Record<string, unknown>)
+      const clauses = txnRevertClauses(prior[i]!, u as Record<string, unknown>, symbol)
       if (clauses.length === 0) return null
       return `${prior[i]!.payeeName ?? prior[i]!.id}: ${clauses.join(', ')}`
     }).filter((s): s is string => s !== null)
@@ -482,7 +541,7 @@ export class Ynab {
 
   async updateCategory(planId: string, categoryId: string, patch: { name?: string; hidden?: boolean; goalTarget?: number | null; goalTargetDate?: string | null; goalFrequency?: 'monthly' | 'weekly' | 'yearly' | null; goalNeedsWholeAmount?: boolean | null }) {
     this.assertWrites()
-    const prior = await this.#getCategoryRaw(planId, categoryId)
+    const [prior, symbol] = await Promise.all([this.#getCategoryRaw(planId, categoryId), this.#resolveSymbol(planId)])
     const body: Record<string, unknown> = {}
     if (patch.name !== undefined) body.name = patch.name
     if (patch.hidden !== undefined) body.hidden = patch.hidden
@@ -496,7 +555,7 @@ export class Ynab {
     await this.client.request(`/plans/${planId}/categories/${categoryId}`, { method: 'PATCH', body: { category: body } })
     if (jid) this.journal!.commit(jid)
     this.cache?.invalidate(planId)
-    return { updated: categoryId, inverse: `To reverse: for category "${prior.name}", set ${categoryInverseClauses(body, prior)}.` }
+    return { updated: categoryId, inverse: `To reverse: for category "${prior.name}", set ${categoryInverseClauses(body, prior, symbol ?? '')}.` }
   }
 
   async #patchMonthCategory(planId: string, month: string, categoryId: string, budgetedMilli: number): Promise<any> {
@@ -506,7 +565,12 @@ export class Ynab {
   async assignBudget(planId: string, month: string, categoryId: string, amount: number, reason?: string, opts: { confirm?: boolean } = {}) {
     this.assertWrites()
     if (!opts.confirm) throw new ConfirmationRequiredError('Assigning budget to a category')
-    const prior = (await this.client.request<any>(`/plans/${planId}/months/${month}/categories/${categoryId}`)).category
+    const [priorData, resolvedSymbol] = await Promise.all([
+      this.client.request<any>(`/plans/${planId}/months/${month}/categories/${categoryId}`),
+      this.#resolveSymbol(planId),
+    ])
+    const prior = priorData.category
+    const symbol = resolvedSymbol ?? ''
     const suffix = reason ? ` — reason: ${reason}` : ''
     const jid = this.journal?.begin(`assign ${amount} to category in ${month}${suffix}`, [{ kind: 'assign_budget', planId, month, categoryId, budgetedMilli: prior.budgeted }])
     await this.#patchMonthCategory(planId, month, categoryId, dollarsToMilli(amount))
@@ -514,17 +578,19 @@ export class Ynab {
     this.cache?.invalidate(planId)
     // Symmetric — no extra API call: `prior` was already fetched above for the undo journal, so its
     // name/budgeted give us the reverse assignment for free.
-    const inverse = `To reverse: set the assigned amount for ${prior.name ?? categoryId} in ${month} back to ${formatDollars(milliToDollars(prior.budgeted))} (it was just changed to ${formatDollars(amount)}).`
-    return { month, categoryId, assigned: amount, assignedText: formatDollars(amount), ...(reason ? { reason } : {}), inverse }
+    const inverse = `To reverse: set the assigned amount for ${prior.name ?? categoryId} in ${month} back to ${formatDollars(milliToDollars(prior.budgeted), { symbol })} (it was just changed to ${formatDollars(amount, { symbol })}).`
+    return { month, categoryId, assigned: amount, assignedText: formatDollars(amount, { symbol }), ...(reason ? { reason } : {}), inverse }
   }
 
   async moveMoney(planId: string, month: string, fromCategoryId: string, toCategoryId: string, amount: number, reason?: string, opts: { confirm?: boolean } = {}) {
     this.assertWrites()
     if (!opts.confirm) throw new ConfirmationRequiredError('Moving money between categories')
-    const [from, to] = await Promise.all([
+    const [from, to, resolvedSymbol] = await Promise.all([
       this.client.request<any>(`/plans/${planId}/months/${month}/categories/${fromCategoryId}`),
       this.client.request<any>(`/plans/${planId}/months/${month}/categories/${toCategoryId}`),
+      this.#resolveSymbol(planId),
     ])
+    const symbol = resolvedSymbol ?? ''
     const fromPrior = from.category.budgeted as number
     const toPrior = to.category.budgeted as number
     const milli = dollarsToMilli(amount)
@@ -559,26 +625,26 @@ export class Ynab {
         if (this.journal) {
           throw new Error(`${lead}; run undo_last to restore both categories.`)
         }
-        throw new Error(`${lead}: "${fromName}" is short ${formatDollars(amount)} ` +
-          `(now ${formatDollars(milliToDollars(fromPrior - milli))}, was ${formatDollars(milliToDollars(fromPrior))}); ` +
-          `"${toName}" was never credited (still ${formatDollars(milliToDollars(toPrior))}). ` +
+        throw new Error(`${lead}: "${fromName}" is short ${formatDollars(amount, { symbol })} ` +
+          `(now ${formatDollars(milliToDollars(fromPrior - milli), { symbol })}, was ${formatDollars(milliToDollars(fromPrior), { symbol })}); ` +
+          `"${toName}" was never credited (still ${formatDollars(milliToDollars(toPrior), { symbol })}). ` +
           // assign_budget sets the ABSOLUTE assigned amount, not a delta — naming `amount` here would
           // instruct a SECOND wrong write (e.g. setting Dining Out to $100 instead of restoring it to
           // $500). Must name the restore-to figure (fromPrior), matching the idiom assignBudget's own
           // inverse uses two functions above.
-          `To fix it, manually set the assigned amount for "${fromName}" in ${month} back to ${formatDollars(milliToDollars(fromPrior))}.`)
+          `To fix it, manually set the assigned amount for "${fromName}" in ${month} back to ${formatDollars(milliToDollars(fromPrior), { symbol })}.`)
       }
       throw new Error(`${(e as Error).message} — the first half of the move was rolled back; no money moved.`)
     }
     if (jid) this.journal!.commit(jid)
     this.cache?.invalidate(planId)
-    const inverse = `To reverse: move ${formatDollars(amount)} from ${toName} back to ${fromName}.`
+    const inverse = `To reverse: move ${formatDollars(amount, { symbol })} from ${toName} back to ${fromName}.`
     const fromAssigned = milliToDollars(fromPrior - milli)
     const toAssigned = milliToDollars(toPrior + milli)
     return {
-      moved: amount, movedText: formatDollars(amount),
-      from: { id: fromCategoryId, assigned: fromAssigned, assignedText: formatDollars(fromAssigned) },
-      to: { id: toCategoryId, assigned: toAssigned, assignedText: formatDollars(toAssigned) },
+      moved: amount, movedText: formatDollars(amount, { symbol }),
+      from: { id: fromCategoryId, assigned: fromAssigned, assignedText: formatDollars(fromAssigned, { symbol }) },
+      to: { id: toCategoryId, assigned: toAssigned, assignedText: formatDollars(toAssigned, { symbol }) },
       ...(reason ? { reason } : {}), inverse,
     }
   }
@@ -733,8 +799,12 @@ export class Ynab {
   }
 
   async #allTxns(planId: string, sinceDate: string, untilDate?: string): Promise<Txn[]> {
-    const data = await this.client.request<any>(`/plans/${planId}/transactions`, { query: { since_date: sinceDate, until_date: untilDate } })
-    return data.transactions.filter((t: any) => !t.deleted).map(mapTxn)
+    const [data, symbol] = await Promise.all([
+      this.client.request<any>(`/plans/${planId}/transactions`, { query: { since_date: sinceDate, until_date: untilDate } }),
+      this.#resolveSymbol(planId),
+    ])
+    const sym = symbol ?? ''
+    return data.transactions.filter((t: any) => !t.deleted).map((t: any) => mapTxn(t, sym))
   }
   #nonTransfer(txns: Txn[]): Txn[] { return txns.filter((t) => t.transferAccountId === null) }
 
@@ -749,48 +819,56 @@ export class Ynab {
       const prevUntil = new Date(Date.parse(since) - 86_400_000).toISOString().slice(0, 10)
       compareTxns = this.#nonTransfer(await this.#allTxns(planId, prevSince, prevUntil))
     }
-    return { window: { since, until }, rows: spendingSummary(cur.filter((t) => t.amount < 0), { by: opts.by ?? 'category', compareTxns: compareTxns?.filter((t) => t.amount < 0) }) }
+    const symbol = (await this.#resolveSymbol(planId)) ?? ''
+    return { window: { since, until }, rows: spendingSummary(cur.filter((t) => t.amount < 0), { by: opts.by ?? 'category', compareTxns: compareTxns?.filter((t) => t.amount < 0), symbol }) }
   }
 
   async getBudgetHealth(planId: string) {
-    const [month, accountsData] = await Promise.all([this.getMonth(planId, 'current'), this.client.request<any>(`/plans/${planId}/accounts`)])
+    const [month, accountsData, resolvedSymbol] = await Promise.all([this.getMonth(planId, 'current'), this.client.request<any>(`/plans/${planId}/accounts`), this.#resolveSymbol(planId)])
     const accounts = accountsData.accounts.filter((a: any) => !a.deleted && !a.closed).map((a: any) => ({ name: a.name, type: a.type, balance: milliToDollars(a.balance) }))
-    return budgetHealth({ readyToAssign: month.readyToAssign, categories: month.categories, accounts })
+    return budgetHealth({ readyToAssign: month.readyToAssign, categories: month.categories, accounts, symbol: resolvedSymbol ?? '' })
   }
 
   async getRecurringCharges(planId: string) {
-    return detectRecurring(await this.#allTxns(planId, new Date(Date.now() - 400 * 86_400_000).toISOString().slice(0, 10)))
+    const [txns, symbol] = await Promise.all([
+      this.#allTxns(planId, new Date(Date.now() - 400 * 86_400_000).toISOString().slice(0, 10)),
+      this.#resolveSymbol(planId),
+    ])
+    return detectRecurring(txns, symbol ?? '')
   }
 
   async getIncomeVsExpense(planId: string, opts: { months?: number } = {}) {
     const n = opts.months ?? 6
     const today = new Date().toISOString().slice(0, 10)
     const since = monthWindowStart(today, n)
-    return incomeVsExpense(this.#nonTransfer(await this.#allTxns(planId, since)), today)
+    const [txns, symbol] = await Promise.all([this.#allTxns(planId, since), this.#resolveSymbol(planId)])
+    return incomeVsExpense(this.#nonTransfer(txns), today, symbol ?? '')
   }
 
   async getNetWorthHistory(planId: string) {
-    return netWorthHistory(await this.#allTxns(planId, FAR_PAST_SINCE_DATE))
+    const [txns, symbol] = await Promise.all([this.#allTxns(planId, FAR_PAST_SINCE_DATE), this.#resolveSymbol(planId)])
+    return netWorthHistory(txns, symbol ?? '')
   }
 
   async #monthCloseRaw(planId: string, cutoff: string, lookbackDays: number) {
     const lookback = Math.min(Math.max(lookbackDays, 1), 365)
     const since = new Date(Date.parse(cutoff) - lookback * 86_400_000).toISOString().slice(0, 10)
     const monthKey = cutoff.slice(0, 8) + '01'
-    const [accountsData, txnsData, monthData] = await Promise.all([
+    const [accountsData, txnsData, monthData, resolvedSymbol] = await Promise.all([
       this.client.request<any>(`/plans/${planId}/accounts`),
       this.client.request<any>(`/plans/${planId}/transactions`, { query: { since_date: since } }),
       this.client.request<any>(`/plans/${planId}/months/${monthKey}`),
+      this.#resolveSymbol(planId),
     ])
     const accounts = accountsData.accounts.filter((a: RawAccount) => !a.deleted) as RawAccount[]
     const txns = txnsData.transactions as RawTxn[]
     const monthCats = monthData.month.categories as RawMonthCat[]
-    return { accounts, txns, monthCats, rtaMilli: monthData.month.to_be_budgeted as number }
+    return { accounts, txns, monthCats, rtaMilli: monthData.month.to_be_budgeted as number, symbol: resolvedSymbol ?? '' }
   }
 
   async monthClose(planId: string, opts: { cutoff: string; lookbackDays?: number }) {
     const { cutoff } = opts
-    const { accounts, txns, monthCats } = await this.#monthCloseRaw(planId, cutoff, opts.lookbackDays ?? 120)
+    const { accounts, txns, monthCats, symbol } = await this.#monthCloseRaw(planId, cutoff, opts.lookbackDays ?? 120)
     const warnings: string[] = []
     const balances = asOfBalances(accounts, txns, cutoff)
     const { matches, warnings: matchWarnings } = matchCards(accounts, monthCats)
@@ -803,10 +881,10 @@ export class Ynab {
       const gap = milliToDollars(b.workingMilli + category.balance)
       return {
         account: account.name,
-        workingAsOf, workingAsOfText: formatDollars(workingAsOf),
-        clearedAsOf, clearedAsOfText: formatDollars(clearedAsOf),
-        availableAtMonthEnd, availableAtMonthEndText: formatDollars(availableAtMonthEnd),
-        gap, gapText: formatDollars(gap),
+        workingAsOf, workingAsOfText: formatDollars(workingAsOf, { symbol }),
+        clearedAsOf, clearedAsOfText: formatDollars(clearedAsOf, { symbol }),
+        availableAtMonthEnd, availableAtMonthEndText: formatDollars(availableAtMonthEnd, { symbol }),
+        gap, gapText: formatDollars(gap, { symbol }),
         paymentCategoryId: category.id,
       }
     })
@@ -815,7 +893,7 @@ export class Ynab {
     const raw = findBlockers(txns, cutoff, onBudget)
     const row = (t: RawTxn) => {
       const amount = milliToDollars(t.amount)
-      return { id: t.id, date: t.date, payee: t.payee_name ?? null, account: t.account_name ?? accountName.get(t.account_id) ?? t.account_id, amount, amountText: formatDollars(amount) }
+      return { id: t.id, date: t.date, payee: t.payee_name ?? null, account: t.account_name ?? accountName.get(t.account_id) ?? t.account_id, amount, amountText: formatDollars(amount, { symbol }) }
     }
     const cap = <T>(list: T[], label: string): T[] => {
       if (list.length > BLOCKER_CAP) warnings.push(`${label}: showing ${BLOCKER_CAP} of ${list.length} — resolve and re-run.`)
@@ -838,18 +916,18 @@ export class Ynab {
       },
       redCategories: reds.map((c) => {
         const available = milliToDollars(c.balance)
-        return { id: c.id, name: c.name, available, availableText: formatDollars(available), group: c.category_group_name ?? '' }
+        return { id: c.id, name: c.name, available, availableText: formatDollars(available, { symbol }), group: c.category_group_name ?? '' }
       }),
       donors: donors.map((d) => {
         const available = milliToDollars(d.cat.balance)
         const excess = milliToDollars(d.excessMilli)
-        return { id: d.cat.id, name: d.cat.name, group: d.cat.category_group_name ?? '', available, availableText: formatDollars(available), excess, excessText: formatDollars(excess), hasTarget: d.cat.goal_type != null }
+        return { id: d.cat.id, name: d.cat.name, group: d.cat.category_group_name ?? '', available, availableText: formatDollars(available, { symbol }), excess, excessText: formatDollars(excess, { symbol }), hasTarget: d.cat.goal_type != null }
       }),
     }
   }
 
   async proposeCoverage(planId: string, opts: { cutoff: string; strategy?: 'donors_first' | 'rta_only' }) {
-    const { monthCats, rtaMilli } = await this.#monthCloseRaw(planId, opts.cutoff, 120)
+    const { monthCats, rtaMilli, symbol } = await this.#monthCloseRaw(planId, opts.cutoff, 120)
     const reds = findRedCategories(monthCats)
     const donors = rankDonors(monthCats, new Set(reds.map((c) => c.id)))
     const res = proposeMoves(reds, donors, rtaMilli, opts.strategy ?? 'donors_first')
@@ -859,14 +937,14 @@ export class Ynab {
       month: opts.cutoff.slice(0, 8) + '01',
       moves: res.moves.map((m) => {
         const amount = milliToDollars(m.amountMilli)
-        return { from: m.fromName, fromId: m.fromId, to: m.toName, toId: m.toId, amount, amountText: formatDollars(amount), source: m.source }
+        return { from: m.fromName, fromId: m.fromId, to: m.toName, toId: m.toId, amount, amountText: formatDollars(amount, { symbol }), source: m.source }
       }),
       unfundable: res.unfundable.map((u) => {
         const needed = milliToDollars(u.neededMilli)
-        return { id: u.id, name: u.name, needed, neededText: formatDollars(needed) }
+        return { id: u.id, name: u.name, needed, neededText: formatDollars(needed, { symbol }) }
       }),
-      rtaUsed, rtaUsedText: formatDollars(rtaUsed),
-      rtaRemaining, rtaRemainingText: formatDollars(rtaRemaining),
+      rtaUsed, rtaUsedText: formatDollars(rtaUsed, { symbol }),
+      rtaRemaining, rtaRemainingText: formatDollars(rtaRemaining, { symbol }),
     }
   }
 
@@ -899,14 +977,20 @@ export class Ynab {
   }
 
   async getCategoryHistory(planId: string, opts: { categoryId: string; sinceMonth: string; untilMonth: string }) {
-    const h = await this.#categoryHistoryMilli(planId, opts)
+    // Throws synchronously on an invalid range before any fetch fires — see the identical guard (and
+    // its rationale) on #attributedFloat below. Without this, Promise.all would kick off the
+    // #resolveSymbol /plans fetch before #categoryHistoryMilli's internal monthRange rejection is
+    // observed, and "validates the range before any fetch" would no longer be true.
+    monthRange(opts.sinceMonth, opts.untilMonth)
+    const [h, resolvedSymbol] = await Promise.all([this.#categoryHistoryMilli(planId, opts), this.#resolveSymbol(planId)])
+    const symbol = resolvedSymbol ?? ''
     return {
       category: { id: opts.categoryId, name: h.name },
       points: h.pointsMilli.map((p) => {
         const assigned = milliToDollars(p.assignedMilli)
         const activity = milliToDollars(p.activityMilli)
         const available = milliToDollars(p.availableMilli)
-        return { month: p.month, assigned, assignedText: formatDollars(assigned), activity, activityText: formatDollars(activity), available, availableText: formatDollars(available) }
+        return { month: p.month, assigned, assignedText: formatDollars(assigned, { symbol }), activity, activityText: formatDollars(activity, { symbol }), available, availableText: formatDollars(available, { symbol }) }
       }),
       skippedMonths: h.skippedMonths,
     }
@@ -921,10 +1005,11 @@ export class Ynab {
     // otherwise kick off the account/transactions calls before #categoryHistoryMilli's internal
     // monthRange rejection is observed. The result is discarded; it exists only to throw early.
     monthRange(opts.sinceMonth, opts.untilMonth)
-    const [h, accountData, txnsData] = await Promise.all([
+    const [h, accountData, txnsData, resolvedSymbol] = await Promise.all([
       this.#categoryHistoryMilli(planId, { categoryId: opts.paymentCategoryId, sinceMonth: opts.sinceMonth, untilMonth: opts.untilMonth }),
       this.client.request<any>(`/plans/${planId}/accounts/${opts.cardAccountId}`),
       this.client.request<any>(`/plans/${planId}/accounts/${opts.cardAccountId}/transactions`, { query: { since_date: `${opts.sinceMonth}-01` } }),
+      this.#resolveSymbol(planId),
     ])
     const series = floatSeries(
       h.pointsMilli.map((p) => ({ month: p.month, availableMilli: p.availableMilli })),
@@ -937,11 +1022,11 @@ export class Ynab {
       txnsData.transactions,
     )
     const attrByMonth = new Map(attributed.map((a) => [a.month, a]))
-    return { account: accountData.account.name as string, series, attrByMonth, skippedMonths: h.skippedMonths, fetchedMonths: h.pointsMilli.length }
+    return { account: accountData.account.name as string, series, attrByMonth, skippedMonths: h.skippedMonths, fetchedMonths: h.pointsMilli.length, symbol: resolvedSymbol ?? '' }
   }
 
   async getCreditCardFloatHistory(planId: string, opts: { paymentCategoryId: string; cardAccountId: string; sinceMonth: string; untilMonth: string }) {
-    const { account, series, attrByMonth, skippedMonths, fetchedMonths } = await this.#attributedFloat(planId, opts)
+    const { account, series, attrByMonth, skippedMonths, fetchedMonths, symbol } = await this.#attributedFloat(planId, opts)
     return {
       account,
       points: series.map((p): {
@@ -954,14 +1039,14 @@ export class Ynab {
         const gap = milliToDollars(p.gapMilli)
         const gapChange = milliToDollars(p.gapChangeMilli)
         const base = {
-          month: p.month, owed, owedText: formatDollars(owed), available, availableText: formatDollars(available),
-          gap, gapText: formatDollars(gap), changed: p.changed, gapChange, gapChangeText: formatDollars(gapChange), direction: p.direction,
+          month: p.month, owed, owedText: formatDollars(owed, { symbol }), available, availableText: formatDollars(available, { symbol }),
+          gap, gapText: formatDollars(gap, { symbol }), changed: p.changed, gapChange, gapChangeText: formatDollars(gapChange, { symbol }), direction: p.direction,
         }
         if (!p.changed) return base
         const a = attrByMonth.get(p.month)
         if (!a || a.components.length === 0) return base
         const primary = a.components.reduce((best, c) => (Math.abs(c.amountMilli) > Math.abs(best.amountMilli) ? c : best))
-        return { ...base, cause: primary.cause, evidence: { components: a.components.map(toEvidenceComponent) } }
+        return { ...base, cause: primary.cause, evidence: { components: a.components.map((c) => toEvidenceComponent(c, symbol)) } }
       }),
       skippedMonths,
       note: 'gap = available − owed at month end. 0 = covered; negative = payment category short (float). A STATIC gap is carried history; months with changed:true are where new float appeared or was paid down.' +
@@ -977,7 +1062,7 @@ export class Ynab {
   async backfillLedger(planId: string, opts: { paymentCategoryId: string; cardAccountId: string; sinceMonth: string; untilMonth?: string }) {
     if (!this.ledger) throw new Error('No ledger configured — this server was started without a LedgerStore.')
     const untilMonth = opts.untilMonth ?? currentMonthUTC()
-    const { account, series, attrByMonth } = await this.#attributedFloat(planId, { paymentCategoryId: opts.paymentCategoryId, cardAccountId: opts.cardAccountId, sinceMonth: opts.sinceMonth, untilMonth })
+    const { account, series, attrByMonth, symbol } = await this.#attributedFloat(planId, { paymentCategoryId: opts.paymentCategoryId, cardAccountId: opts.cardAccountId, sinceMonth: opts.sinceMonth, untilMonth })
 
     // Records are a historical ledger line, stamped gapStatus:'final' — only months that have actually
     // finished get one. Writing the in-progress month would lie (a future cutoff, zero blockers, 'final'
@@ -992,15 +1077,15 @@ export class Ynab {
       const gap = milliToDollars(p.gapMilli)
       const causes = (attrByMonth.get(p.month)?.components ?? []).map((c) => {
         const change = milliToDollars(c.amountMilli)
-        return { month: p.month, change, changeText: formatDollars(change), cause: c.cause as string }
+        return { month: p.month, change, changeText: formatDollars(change, { symbol }), cause: c.cause as string }
       })
       return {
         planId, cutoff: lastDayOf(p.month), gapStatus: 'final' as const,
         perCard: [{
-          account, workingAsOf, workingAsOfText: formatDollars(workingAsOf),
-          clearedAsOf: workingAsOf, clearedAsOfText: formatDollars(workingAsOf),
-          availableAtMonthEnd, availableAtMonthEndText: formatDollars(availableAtMonthEnd),
-          gap, gapText: formatDollars(gap),
+          account, workingAsOf, workingAsOfText: formatDollars(workingAsOf, { symbol }),
+          clearedAsOf: workingAsOf, clearedAsOfText: formatDollars(workingAsOf, { symbol }),
+          availableAtMonthEnd, availableAtMonthEndText: formatDollars(availableAtMonthEnd, { symbol }),
+          gap, gapText: formatDollars(gap, { symbol }),
         }],
         blockers: { unapproved: 0, uncategorized: 0, unclearedBeforeCutoff: 0 },
         causes,
@@ -1026,8 +1111,8 @@ export class Ynab {
     const summary = nonZeroSince === null
       ? `Card is covered as of ${last?.month ?? untilMonth}.`
       : currentGap < 0
-        ? `You've been carrying ${formatDollars(Math.abs(currentGap))} of float since ${sinceAtLeast ? 'at least ' : ''}${nonZeroSince}.`
-        : `Your payment category has run a ${formatDollars(Math.abs(currentGap))} surplus since ${sinceAtLeast ? 'at least ' : ''}${nonZeroSince}.`
+        ? `You've been carrying ${formatDollars(Math.abs(currentGap), { symbol })} of float since ${sinceAtLeast ? 'at least ' : ''}${nonZeroSince}.`
+        : `Your payment category has run a ${formatDollars(Math.abs(currentGap), { symbol })} surplus since ${sinceAtLeast ? 'at least ' : ''}${nonZeroSince}.`
 
     const changePoints = series.filter((p) => p.changed).map((p) => {
       const a = attrByMonth.get(p.month)
@@ -1035,19 +1120,20 @@ export class Ynab {
         ? a.components.reduce((best, c) => (Math.abs(c.amountMilli) > Math.abs(best.amountMilli) ? c : best))
         : undefined
       const gapChange = milliToDollars(p.gapChangeMilli)
-      return { month: p.month, gapChange, gapChangeText: formatDollars(gapChange), cause: (primary?.cause ?? 'unattributed') as GapCause }
+      return { month: p.month, gapChange, gapChangeText: formatDollars(gapChange, { symbol }), cause: (primary?.cause ?? 'unattributed') as GapCause }
     })
 
     return {
       account, monthsWritten: written.length,
-      discovery: { currentGap, currentGapText: formatDollars(currentGap), nonZeroSince, sinceAtLeast, summary },
+      discovery: { currentGap, currentGapText: formatDollars(currentGap, { symbol }), nonZeroSince, sinceAtLeast, summary },
       changePoints,
     }
   }
 
   async recordMonthClose(record: Omit<MonthCloseRecord, 'id' | 'recordedAt'>): Promise<MonthCloseRecord> {
     if (!this.ledger) throw new Error('No ledger configured — this server was started without a LedgerStore.')
-    return await this.ledger.append(withMoneyText(record))
+    const symbol = (await this.#resolveSymbol(record.planId)) ?? ''
+    return await this.ledger.append(withMoneyText(record, symbol))
   }
 
   async getMonthCloseLedger(opts?: { limit?: number; cutoff?: string; kind?: 'close' | 'backfill' }): Promise<{ records: MonthCloseRecord[]; note?: string }> {

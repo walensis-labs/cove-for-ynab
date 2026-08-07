@@ -4,31 +4,35 @@ import { formatDollars } from './money.js'
 
 const r2 = (n: number) => Math.round(n * 100) / 100
 
-export function spendingSummary(txns: Txn[], opts: { by: 'category' | 'payee'; compareTxns?: Txn[] }) {
-  const cur = aggregateTxns(txns, opts.by)
+// `symbol` defaults to '$' for callers with no currency context (mirrors formatDollars' own default);
+// every Ynab-instance call site in domain.ts must pass the plan's verified symbol explicitly.
+export function spendingSummary(txns: Txn[], opts: { by: 'category' | 'payee'; compareTxns?: Txn[]; symbol?: string }) {
+  const symbol = opts.symbol ?? '$'
+  const cur = aggregateTxns(txns, opts.by, symbol)
   if (!opts.compareTxns) return cur
-  const prev = new Map(aggregateTxns(opts.compareTxns, opts.by).map((x) => [x.key, x.total]))
+  const prev = new Map(aggregateTxns(opts.compareTxns, opts.by, symbol).map((x) => [x.key, x.total]))
   return cur.map((row) => {
     const prevTotal = prev.get(row.key)
     return {
-      ...row, prevTotal, ...(prevTotal !== undefined ? { prevTotalText: formatDollars(prevTotal) } : {}),
+      ...row, prevTotal, ...(prevTotal !== undefined ? { prevTotalText: formatDollars(prevTotal, { symbol }) } : {}),
       changePct: prevTotal === undefined || prevTotal === 0 ? null : r2(((Math.abs(row.total) - Math.abs(prevTotal)) / Math.abs(prevTotal)) * 100),
     }
   })
 }
 
-export function budgetHealth(input: { readyToAssign: number; categories: CategorySnapshot[]; accounts: { name: string; type: string; balance: number }[] }) {
+export function budgetHealth(input: { readyToAssign: number; categories: CategorySnapshot[]; accounts: { name: string; type: string; balance: number }[]; symbol?: string }) {
+  const symbol = input.symbol ?? '$'
   const visible = input.categories.filter((c) => !c.hidden)
   return {
-    readyToAssign: input.readyToAssign, readyToAssignText: formatDollars(input.readyToAssign),
-    overspent: visible.filter((c) => c.available < 0).map((c) => ({ name: c.name, available: c.available, availableText: formatDollars(c.available) })),
-    underfunded: visible.filter((c) => (c.goalUnderFunded ?? 0) > 0).map((c) => ({ name: c.name, goalUnderFunded: c.goalUnderFunded!, goalUnderFundedText: formatDollars(c.goalUnderFunded!) })),
+    readyToAssign: input.readyToAssign, readyToAssignText: formatDollars(input.readyToAssign, { symbol }),
+    overspent: visible.filter((c) => c.available < 0).map((c) => ({ name: c.name, available: c.available, availableText: formatDollars(c.available, { symbol }) })),
+    underfunded: visible.filter((c) => (c.goalUnderFunded ?? 0) > 0).map((c) => ({ name: c.name, goalUnderFunded: c.goalUnderFunded!, goalUnderFundedText: formatDollars(c.goalUnderFunded!, { symbol }) })),
     creditCardStatus: input.accounts
       .filter((a) => a.type === 'creditCard' && a.balance < 0)
       .map((a) => {
         const pay = visible.find((c) => c.name === a.name)
         const paymentAvailable = pay?.available ?? 0
-        return { account: a.name, owed: a.balance, owedText: formatDollars(a.balance), paymentAvailable, paymentAvailableText: formatDollars(paymentAvailable), covered: paymentAvailable >= -a.balance }
+        return { account: a.name, owed: a.balance, owedText: formatDollars(a.balance, { symbol }), paymentAvailable, paymentAvailableText: formatDollars(paymentAvailable, { symbol }), covered: paymentAvailable >= -a.balance }
       }),
   }
 }
@@ -42,7 +46,7 @@ function cadenceOf(gaps: number[]): 'weekly' | 'monthly' | 'yearly' | null {
   return null
 }
 
-export function detectRecurring(txns: Txn[]) {
+export function detectRecurring(txns: Txn[], symbol = '$') {
   const byPayee = new Map<string, Txn[]>()
   for (const t of txns) {
     if (!t.payeeName || t.amount >= 0 || t.transferAccountId) continue
@@ -56,7 +60,7 @@ export function detectRecurring(txns: Txn[]) {
     const cadence = cadenceOf(gaps)
     if (!cadence) continue
     const last = sorted[sorted.length - 1]!
-    out.push({ payee, cadence, lastAmount: last.amount, lastAmountText: formatDollars(last.amount), lastDate: last.date, occurrences: sorted.length, amountChanged: Math.abs(last.amount - sorted[0]!.amount) > 0.005 })
+    out.push({ payee, cadence, lastAmount: last.amount, lastAmountText: formatDollars(last.amount, { symbol }), lastDate: last.date, occurrences: sorted.length, amountChanged: Math.abs(last.amount - sorted[0]!.amount) > 0.005 })
   }
   return out.sort((a, b) => a.lastAmount - b.lastAmount)
 }
@@ -75,7 +79,7 @@ export function monthWindowStart(todayIso: string, months: number): string {
   return `${yy}-${String(mm).padStart(2, '0')}-01`
 }
 
-export function incomeVsExpense(txns: Txn[], todayIso: string) {
+export function incomeVsExpense(txns: Txn[], todayIso: string, symbol = '$') {
   const months = new Map<string, { income: number; expense: number }>()
   for (const t of txns) {
     const m = t.date.slice(0, 7)
@@ -88,11 +92,11 @@ export function incomeVsExpense(txns: Txn[], todayIso: string) {
   return [...months.entries()].sort(([a], [b]) => a.localeCompare(b))
     .map(([month, v]) => {
       const net = r2(v.income + v.expense)
-      return { month, income: v.income, incomeText: formatDollars(v.income), expense: v.expense, expenseText: formatDollars(v.expense), net, netText: formatDollars(net), partial: month === currentMonth }
+      return { month, income: v.income, incomeText: formatDollars(v.income, { symbol }), expense: v.expense, expenseText: formatDollars(v.expense, { symbol }), net, netText: formatDollars(net, { symbol }), partial: month === currentMonth }
     })
 }
 
-export function netWorthHistory(txns: Txn[]) {
+export function netWorthHistory(txns: Txn[], symbol = '$') {
   const monthly = new Map<string, number>()
   for (const t of txns) {
     const m = t.date.slice(0, 7)
@@ -101,6 +105,6 @@ export function netWorthHistory(txns: Txn[]) {
   let acc = 0
   return [...monthly.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([month, delta]) => {
     acc = r2(acc + delta)
-    return { month, netWorth: acc, netWorthText: formatDollars(acc) }
+    return { month, netWorth: acc, netWorthText: formatDollars(acc, { symbol }) }
   })
 }

@@ -20,8 +20,14 @@ function lastDayOfIso(month: string): string {
   return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10)
 }
 
+// Currency-symbol threading (fix/currency-symbol): every *Text-emitting Ynab method now resolves the
+// plan's real symbol via one /plans fetch before formatting — a resolvable USD plan here keeps this
+// file's historical '$'-prefixed assertions unchanged.
+const PLANS_USD = { plans: [{ id: 'last-used', name: 'Family', last_modified_on: '2026-07-01T00:00:00Z', currency_format: { iso_code: 'USD', currency_symbol: '$' } }] }
+
 function seriesClient() {
   return { request: vi.fn(async (path: string) => {
+    if (path === '/plans') return PLANS_USD
     const m = path.match(/\/months\/(\d{4}-\d{2})-01\/categories\/c1$/)
     if (m) {
       const month = m[1]!
@@ -44,7 +50,8 @@ describe('getCategoryHistory', () => {
       { month: '2026-06', assigned: 100, assignedText: '$100.00', activity: -50, activityText: '-$50.00', available: 500, availableText: '$500.00' },
       { month: '2026-07', assigned: 100, assignedText: '$100.00', activity: -50, activityText: '-$50.00', available: 700, availableText: '$700.00' },
     ])
-    expect(c.request).toHaveBeenCalledTimes(3)
+    // 3 month-category fetches + 1 /plans currency-symbol lookup (fix/currency-symbol).
+    expect(c.request).toHaveBeenCalledTimes(4)
   })
   it('validates the range before any fetch', async () => {
     const c = { request: vi.fn() } as any
@@ -57,6 +64,7 @@ describe('getCategoryHistory', () => {
 describe('getCreditCardFloatHistory', () => {
   it('composes owed/available/gap in dollars with changed flags', async () => {
     const c = { request: vi.fn(async (path: string) => {
+      if (path === '/plans') return PLANS_USD
       const m = path.match(/\/months\/(\d{4}-\d{2})-01\/categories\/p1$/)
       if (m) return { category: { id: 'p1', name: 'Citi Card', budgeted: m[1] === '2026-08' ? 250000 : 0, activity: 0, balance: m[1] === '2026-08' ? 1000000 : 500000 } }
       if (path.endsWith('/accounts/a1')) return { account: { id: 'a1', name: 'Citi Card', balance: -1000000 } }
@@ -121,6 +129,7 @@ const [M3, M2, M1] = [monthOffset(-3), monthOffset(-2), monthOffset(-1)]
 // Same shape as the getCreditCardFloatHistory fixture above (3 months, card ends covered at the newest month).
 function coveredFloatClient() {
   return { request: vi.fn(async (path: string) => {
+    if (path === '/plans') return PLANS_USD
     const m = path.match(/\/months\/(\d{4}-\d{2})-01\/categories\/p1$/)
     if (m) return { category: { id: 'p1', name: 'Citi Card', budgeted: m[1] === M1 ? 250000 : 0, activity: 0, balance: m[1] === M1 ? 1000000 : 500000 } }
     if (path.endsWith('/accounts/a1')) return { account: { id: 'a1', name: 'Citi Card', balance: -1000000 } }
@@ -135,6 +144,7 @@ function coveredFloatClient() {
 // Payment category never funded (available 0 every month) — gap stays nonzero (negative/float) across the whole window.
 function neverCoveredFloatClient() {
   return { request: vi.fn(async (path: string) => {
+    if (path === '/plans') return PLANS_USD
     const m = path.match(/\/months\/(\d{4}-\d{2})-01\/categories\/p1$/)
     if (m) return { category: { id: 'p1', name: 'Citi Card', budgeted: 0, activity: 0, balance: 0 } }
     if (path.endsWith('/accounts/a1')) return { account: { id: 'a1', name: 'Citi Card', balance: -1000000 } }
@@ -149,6 +159,7 @@ function neverCoveredFloatClient() {
 // Payment category permanently over-funded — gap stays nonzero (positive/surplus) across the whole window.
 function surplusFloatClient() {
   return { request: vi.fn(async (path: string) => {
+    if (path === '/plans') return PLANS_USD
     const m = path.match(/\/months\/(\d{4}-\d{2})-01\/categories\/p1$/)
     if (m) return { category: { id: 'p1', name: 'Citi Card', budgeted: 0, activity: 0, balance: 800000 } }
     if (path.endsWith('/accounts/a1')) return { account: { id: 'a1', name: 'Citi Card', balance: -500000 } }
@@ -250,10 +261,12 @@ describe('getMonthCloseLedger — kind filter passthrough', () => {
 // IMPORTANT 3: recordMonthClose (the kind:'close' write path) must populate the same *Text companions
 // backfillLedger already puts on kind:'backfill' rows — otherwise get_month_close_ledger can return a
 // single response mixing labeled and unlabeled money, which is worse than uniformly unlabeled.
+const PLANS_USD_P1 = { plans: [{ id: 'p1', name: 'Family', last_modified_on: '2026-07-01T00:00:00Z', currency_format: { iso_code: 'USD', currency_symbol: '$' } }] }
+
 describe('recordMonthClose — money *Text companions on the close path', () => {
   it('fills perCard, causes, moves, and buffer companions when the caller omits them', async () => {
     const ledger = tempLedger()
-    const y = new Ynab({ client: { request: vi.fn() } as any, allowWrites: false, ledger })
+    const y = new Ynab({ client: { request: vi.fn(async (path: string) => (path === '/plans' ? PLANS_USD_P1 : undefined)) } as any, allowWrites: false, ledger })
     await y.recordMonthClose({
       planId: 'p1', cutoff: '2026-07-31', gapStatus: 'final',
       perCard: [{ account: 'Citi', workingAsOf: -3241.76, clearedAsOf: -3241.76, availableAtMonthEnd: 2662.65, gap: -579.11 }],
@@ -302,7 +315,7 @@ const asyncStubRecord = (cutoff = '2026-07-31') => ({
 
 describe('Ynab + async LedgerLike (worker substrate)', () => {
   it('recordMonthClose awaits an async ledger and resolves the appended record', async () => {
-    const y = new Ynab({ client: { request: vi.fn() } as any, allowWrites: false, ledger: asyncLedgerStub() })
+    const y = new Ynab({ client: { request: vi.fn(async (path: string) => (path === '/plans' ? PLANS_USD_P1 : undefined)) } as any, allowWrites: false, ledger: asyncLedgerStub() })
     const result = await y.recordMonthClose(asyncStubRecord())
     // IMPORTANT 3: recordMonthClose fills in the *Text companions (perCard's four fields here) before
     // handing the record to ledger.append — so a 'close' row looks the same, money-labeling-wise, as a
@@ -333,6 +346,7 @@ describe('backfillLedger — in-progress month safety', () => {
   // in-progress month opens $300 of float (gap -300), all computed relative to the real clock.
   function midMonthClient(currentMonth: string) {
     return { request: vi.fn(async (path: string) => {
+      if (path === '/plans') return PLANS_USD
       const m = path.match(/\/months\/(\d{4}-\d{2})-01\/categories\/p1$/)
       if (m) return { category: { id: 'p1', name: 'Citi Card', budgeted: 0, activity: 0, balance: 200000 } }
       if (path.endsWith('/accounts/a1')) return { account: { id: 'a1', name: 'Citi Card', balance: -500000 } }
