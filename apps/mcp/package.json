@@ -1,7 +1,7 @@
 {
   "name": "@walensis/cove-mcp",
   "mcpName": "io.github.walensis-labs/mcp-for-ynab",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "license": "MIT",
   "bin": {
