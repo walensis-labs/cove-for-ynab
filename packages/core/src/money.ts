@@ -24,6 +24,14 @@ export interface CurrencyFormatOpts {
   groupSeparator?: string
   /** false = the amount renders with no symbol at all, regardless of `symbol`. Default true. */
   displaySymbol?: boolean
+  /**
+   * fix/currency-symbol review round 3, IMPORTANT 2: the plan's verified ISO code (YNAB's
+   * `currency_format.iso_code`), carried alongside the formatting fields so a caller that needs the
+   * ISO code (getPlanOverview's `plan.currency`) can read it from the same resolved format instead of
+   * re-deriving it from a `find()` over `/plans` — the exact defect this field closes for the symbol.
+   * formatDollars ignores it; it exists purely as a pass-through payload on this type.
+   */
+  isoCode?: string
 }
 
 export function formatDollars(dollars: number, opts: CurrencyFormatOpts = {}): string {

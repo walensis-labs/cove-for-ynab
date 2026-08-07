@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { Ynab } from '../src/domain.js'
+import type { CurrencyFormatOpts } from '../src/money.js'
 
 /**
  * fix/currency-symbol: `formatDollars` used to default to "$" everywhere a *Text companion was
@@ -19,6 +20,13 @@ import { Ynab } from '../src/domain.js'
  *      not just the symbol, is honored
  *   8. (review round 2, MINOR seam) the injectable `currencySymbol` constructor option is honored and
  *      skips the network call
+ *   9. (review round 3, IMPORTANT 1) a cache HIT degrades gracefully too — not just the original
+ *      fetcher — so a method that resolves currency twice for the same plan in one Promise.all
+ *      (getBudgetHealth, getPlanOverview) never throws
+ *  10. (review round 3, IMPORTANT 2) getPlanOverview never fabricates "USD" for an alias id, and costs
+ *      one fewer request for a real plan id by seeding the currency cache from /plans directly
+ *  11. (review round 3, MINOR seam widened) the injectable `currencySymbol` seam accepts a full
+ *      CurrencyFormatOpts, not just a bare string, so a host-cached SEK plan renders correctly
  *
  * See packages/core/src/domain.ts's #resolveCurrency docstring for the design.
  */
@@ -234,6 +242,48 @@ describe('currency symbol: 4) resolved at most once per plan per Ynab instance',
   })
 })
 
+// IMPORTANT 1 (review round 3): the round-2 "don't cache rejections" fix only wrapped the ORIGINAL
+// fetcher's own `await` in try/catch — a concurrent cache HIT (`if (cached) return cached`) handed the
+// caller the raw, still-rejecting fetch promise with no try/catch of its own. Any method that resolves
+// currency for the SAME plan twice inside one `Promise.all` — a direct #resolveCurrency call alongside
+// getMonth/#allTxns (which each resolve internally) — got one graceful degradation and one propagated
+// rejection, contradicting #resolveCurrency's own docstring ("resolves to `{ symbol: '' }` rather than
+// throwing"). getBudgetHealth and getPlanOverview are exactly this shape.
+describe('currency symbol: 9) a cache HIT degrades gracefully too, not just the original fetcher', () => {
+  it('getBudgetHealth returns degraded output instead of throwing when /settings fails', async () => {
+    const c = { request: vi.fn(async (path: string) => {
+      if (path === '/plans/p1/settings') throw new Error('offline')
+      if (path === '/plans/p1/months/current') return monthFixture
+      if (path === '/plans/p1/accounts') return { accounts: [
+        { id: 'a1', name: 'Visa', type: 'creditCard', on_budget: true, closed: false, deleted: false, balance: -50000, cleared_balance: -50000, uncleared_balance: 0 },
+      ] }
+      throw new Error(`unmocked ${path}`)
+    }) } as any
+    const y = new Ynab({ client: c, allowWrites: false })
+    // MUTATION CHECK: before the fix, this `await` rejects (the direct #resolveCurrency call in
+    // getBudgetHealth's own Promise.all races getMonth's internal call, loses the race, and receives the
+    // raw rejecting promise from the cache) instead of resolving with degraded, symbol-less output.
+    const health: any = await y.getBudgetHealth('p1')
+    expect(health.readyToAssignText).toBe('150.25')
+    expect(health.readyToAssignText).not.toContain('$')
+  })
+
+  it('getPlanOverview (alias path) returns degraded output instead of throwing when /settings fails', async () => {
+    const c = { request: vi.fn(async (path: string) => {
+      if (path === '/plans') return { plans: [] } // alias never matches a /plans entry — see finding 5
+      if (path === '/plans/last-used/settings') throw new Error('offline')
+      if (path === '/plans/last-used/months/current') return monthFixture
+      if (path === '/plans/last-used/accounts') return { accounts: [] }
+      throw new Error(`unmocked ${path}`)
+    }) } as any
+    const y = new Ynab({ client: c, allowWrites: false })
+    const overview: any = await y.getPlanOverview('last-used')
+    expect(overview.plan.currency).toBeNull() // unresolvable — never a guessed "USD" (IMPORTANT 2)
+    expect(overview.month.readyToAssignText).toBe('150.25')
+    expect(overview.month.readyToAssignText).not.toContain('$')
+  })
+})
+
 // CRITICAL 1 (review round 2): 'last-used' and 'default' are YNAB path-param ALIASES, never real plan
 // ids — YNAB documents them on getPlanSettingsById specifically. The old resolution
 // (`plans.find(p => p.id === planId)` over `GET /plans`) could never match one, silently stripping the
@@ -359,5 +409,101 @@ describe('currency symbol: 8) injectable currencySymbol seam', () => {
     const m = await y.getMonth('p1', 'current')
     expect(m.readyToAssignText).toBe('¥150.25')
     expect(c.request.mock.calls.some(([p]: any[]) => String(p).endsWith('/settings'))).toBe(false)
+  })
+  // review round 3, MINOR seam widened: a string-only seam can't express symbol placement or
+  // separators — a host caching a SEK plan's bare symbol got "kr1,500.00" (prefix, US separators),
+  // exactly the misformatting IMPORTANT 6 fixed for the live path. A full CurrencyFormatOpts fixes it.
+  it('a full CurrencyFormatOpts (not just a string) is honored, both as a fixed value and via the function seam', async () => {
+    const sek: CurrencyFormatOpts = { symbol: 'kr', symbolFirst: false, decimalSeparator: ',', groupSeparator: ' ' }
+    const c1 = { request: vi.fn(async (path: string) => {
+      if (path === '/plans/p1/months/current') return monthFixture
+      throw new Error(`unmocked ${path}`)
+    }) } as any
+    const y1 = new Ynab({ client: c1, allowWrites: false, currencySymbol: sek })
+    const m1 = await y1.getMonth('p1', 'current')
+    expect(m1.categories[0]!.assignedText).toBe('1 500,00 kr')
+    expect(c1.request.mock.calls.some(([p]: any[]) => String(p).endsWith('/settings'))).toBe(false)
+
+    const c2 = { request: vi.fn(async (path: string) => {
+      if (path === '/plans/p1/months/current') return monthFixture
+      throw new Error(`unmocked ${path}`)
+    }) } as any
+    const y2 = new Ynab({ client: c2, allowWrites: false, currencySymbol: async () => sek })
+    const m2 = await y2.getMonth('p1', 'current')
+    expect(m2.categories[0]!.assignedText).toBe('1 500,00 kr')
+  })
+})
+
+// IMPORTANT 2 (review round 3): getPlanOverview used to resolve plan metadata via
+// `plans.find(p => p.id === planId) ?? { name: '(current plan)', currency: 'USD' }` — `find` can never
+// match a YNAB path-param alias ('last-used'/'default', see finding 5), so every alias caller got a
+// fabricated "USD" as `plan.currency`, worst exactly where the symbol is deliberately absent
+// (display_symbol:false) and that ISO code is the model's only currency signal left.
+describe('currency symbol: 10) getPlanOverview never fabricates a currency, and costs one fewer request for a real id', () => {
+  it("plan_id: 'last-used' (SEK plan) reports the real ISO code, not a fabricated USD", async () => {
+    const c = { request: vi.fn(async (path: string) => {
+      if (path === '/plans') return { plans: [{ id: 'p9', name: 'Someone Else', last_modified_on: '2026-07-01T00:00:00Z', currency_format: { iso_code: 'USD', currency_symbol: '$' } }] }
+      if (path === '/plans/last-used/settings') return settingsOf({ iso_code: 'SEK', currency_symbol: 'kr', symbol_first: false, decimal_digits: 2, decimal_separator: ',', group_separator: ' ', display_symbol: true })
+      if (path === '/plans/last-used/months/current') return monthFixture
+      if (path === '/plans/last-used/accounts') return { accounts: [] }
+      throw new Error(`unmocked ${path}`)
+    }) } as any
+    const y = new Ynab({ client: c, allowWrites: false })
+    const overview: any = await y.getPlanOverview('last-used')
+    expect(overview.plan.currency).toBe('SEK') // not 'USD' — MUTATION CHECK for the old `?? 'USD'` fallback
+    expect(overview.month.readyToAssignText).toBe('150,25 kr') // sanity: real SEK formatting, not USD
+  })
+
+  it("plan_id: 'last-used' reports currency: null when even /settings can't resolve it — never a guess", async () => {
+    const c = { request: vi.fn(async (path: string) => {
+      if (path === '/plans') return { plans: [] }
+      if (path === '/plans/last-used/settings') throw new Error('offline')
+      if (path === '/plans/last-used/months/current') return monthFixture
+      if (path === '/plans/last-used/accounts') return { accounts: [] }
+      throw new Error(`unmocked ${path}`)
+    }) } as any
+    const y = new Ynab({ client: c, allowWrites: false })
+    const overview: any = await y.getPlanOverview('last-used')
+    expect(overview.plan.currency).toBeNull()
+  })
+
+  it('a real plan id costs one fewer request than an alias — the cache is seeded from /plans, skipping /settings', async () => {
+    const cReal = { request: vi.fn(async (path: string) => {
+      if (path === '/plans') return { plans: [{ id: 'p1', name: 'Family', last_modified_on: '2026-07-01T00:00:00Z', currency_format: { iso_code: 'USD', currency_symbol: '$' } }] }
+      if (path === '/plans/p1/months/current') return monthFixture
+      if (path === '/plans/p1/accounts') return { accounts: [] }
+      if (path === '/plans/p1/settings') throw new Error('should not be called for a real plan id — /plans already had its currency_format')
+      throw new Error(`unmocked ${path}`)
+    }) } as any
+    const yReal = new Ynab({ client: cReal, allowWrites: false })
+    const overviewReal: any = await yReal.getPlanOverview('p1')
+    expect(overviewReal.plan.currency).toBe('USD')
+    // MUTATION CHECK: exactly 3 requests for a real plan id (/plans, /accounts, /months/current) — a
+    // 4th (/settings) means the cache-seeding optimization regressed.
+    expect(cReal.request.mock.calls).toHaveLength(3)
+
+    const cAlias = { request: vi.fn(async (path: string) => {
+      if (path === '/plans') return { plans: [] }
+      if (path === '/plans/last-used/settings') return settingsOf({ iso_code: 'USD', currency_symbol: '$' })
+      if (path === '/plans/last-used/months/current') return monthFixture
+      if (path === '/plans/last-used/accounts') return { accounts: [] }
+      throw new Error(`unmocked ${path}`)
+    }) } as any
+    const yAlias = new Ynab({ client: cAlias, allowWrites: false })
+    await yAlias.getPlanOverview('last-used')
+    // The alias path genuinely needs the extra /settings round-trip — only /settings understands aliases.
+    expect(cAlias.request.mock.calls).toHaveLength(4)
+  })
+
+  it('a configured currencySymbol override still wins over the /plans-seeding shortcut', async () => {
+    const c = { request: vi.fn(async (path: string) => {
+      if (path === '/plans') return { plans: [{ id: 'p1', name: 'Family', last_modified_on: '2026-07-01T00:00:00Z', currency_format: { iso_code: 'USD', currency_symbol: '$' } }] }
+      if (path === '/plans/p1/months/current') return monthFixture
+      if (path === '/plans/p1/accounts') return { accounts: [] }
+      throw new Error(`unmocked ${path}`)
+    }) } as any
+    const y = new Ynab({ client: c, allowWrites: false, currencySymbol: '€' })
+    const overview: any = await y.getPlanOverview('p1')
+    expect(overview.month.readyToAssignText).toBe('€150.25') // override wins, not the /plans-derived "$"
   })
 })

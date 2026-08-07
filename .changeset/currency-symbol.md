@@ -33,8 +33,10 @@ budgets: a straight regression from `"$1,500.00"` to `"1,500.00"`.
   "not one per tool call within it" (this changeset's prior wording) overstated the savings: expect
   at most one extra `/settings` request per tool call that emits money `*Text`, same as before.
   `list_plans`/`listPlans()` is a separate, un-memoized call (see below) and no longer shares this
-  cache, so `getPlanOverview` now costs one more request than it used to (`/plans` for plan
-  metadata, `/plans/{id}/settings` for the format) — still one settings fetch, not one per field.
+  cache. `getPlanOverview` costs one more request than it used to for an *alias* `plan_id`
+  (`/plans` for plan metadata, `/plans/{id}/settings` for the format, since only `/settings`
+  understands aliases); for a real `plan_id` a later fix (below) seeds the format cache from the
+  `/plans` payload directly, so the cost is unchanged from before this branch.
   **A follow-up worth considering:** a Durable-Object- or KV-backed format cache keyed by planId,
   shared across requests, would collapse this to zero extra `/settings` calls after the first
   request per plan. `Ynab`'s constructor now accepts an injectable `currencySymbol` seam
@@ -59,3 +61,24 @@ budgets: a straight regression from `"$1,500.00"` to `"1,500.00"`.
   they name "decimal major units of the budget's own currency", since a non-USD budget's
   symbol-less `*Text` sitting next to prose that says "dollars" was itself misleading enough to
   invite a model to render `"−1,000.00"` as `"−$1,000.00"`.
+- **A concurrent cache hit on a failed currency lookup no longer throws.** Two calls resolving the
+  same plan's currency in one tick (e.g. `getPlanOverview`, `getBudgetHealth`, or any method pairing
+  a direct resolve with `getMonth`/`#allTxns` inside one `Promise.all`) used to hand the *second*
+  caller the raw, still-rejecting fetch promise if `/settings` failed — one call degraded gracefully
+  to symbol-less output as documented, the other threw and the whole operation failed. Both now
+  degrade the same way; a transient failure still isn't cached, so the next call retries.
+- **`get_plan_overview` no longer fabricates `"USD"` for the alias `plan_id`s (`'last-used'`,
+  `'default'`).** `plan.currency` now comes from the same verified `currency_format` every `*Text`
+  companion uses, falling back to `null` — never a guessed code — if it can't be resolved at all.
+  This is the same defect CRITICAL 1 fixed for the symbol, closed for the ISO code: previously an
+  alias call's `plan.currency` was always `"USD"` regardless of the budget's real currency.
+- `get_plan_overview` also got cheaper again for a real (non-alias) `plan_id`: it now seeds the
+  currency-format cache from the `/plans` payload it already fetches for plan metadata (which
+  carries the same `currency_format` object `/settings` returns), skipping the extra `/settings`
+  round-trip — back to 3 requests instead of 4. Alias `plan_id`s still cost 4, since only
+  `/settings` understands them.
+- The injectable `currencySymbol` constructor seam now accepts a full `CurrencyFormatOpts`
+  (decimals/separators/symbol position/`display_symbol`), not just a bare string — a string is still
+  accepted and still means "just the symbol, US-style formatting otherwise" (unchanged for existing
+  callers). A string-only seam couldn't express a SEK plan's format, so a host caching just the
+  symbol reintroduced the `"kr1,500.00"` misformatting IMPORTANT 6 fixed for the live path.

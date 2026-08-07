@@ -217,19 +217,24 @@ export class Ynab {
   readonly allowWrites: boolean
   readonly ledger?: LedgerLike
   readonly writeDisabledHint?: string
-  readonly #currencySymbolOverride?: string | ((planId: string) => Promise<string | undefined>)
+  readonly #currencySymbolOverride?: string | CurrencyFormatOpts | ((planId: string) => Promise<string | CurrencyFormatOpts | undefined>)
 
   constructor(opts: {
     client: YnabClient; cache?: DeltaCache; journal?: UndoJournal; allowWrites: boolean; ledger?: LedgerLike; writeDisabledHint?: string
     /**
-     * Injectable seam (currency-symbol review MINOR): lets a host supply the plan's currency symbol
-     * without a per-request `GET /plans/{plan_id}/settings` round-trip — a fixed string for a
-     * single-currency deployment, or a function (typically backed by a cross-request cache the host
-     * owns, e.g. KV/D1 in the Workers deployments) that can return `undefined` to fall back to the live
-     * lookup below. Core has no persistence primitive of its own; this is the seam that lets a host add
-     * one without core reaching for storage it doesn't have.
+     * Injectable seam (currency-symbol review MINOR, widened in review round 3): lets a host supply the
+     * plan's currency FORMAT without a per-request `GET /plans/{plan_id}/settings` round-trip — a fixed
+     * string (bare symbol, US formatting defaults) or a full `CurrencyFormatOpts` for a single-currency
+     * deployment, or a function (typically backed by a cross-request cache the host owns, e.g. KV/D1 in
+     * the Workers deployments) returning either shape, or `undefined` to fall back to the live lookup
+     * below. Widened from string-only: a string-only seam couldn't express symbol placement or
+     * separators, so a host caching a SEK plan's symbol alone reintroduced the exact prefix/US-separator
+     * misformatting (`kr1,500.00`) IMPORTANT 6 fixed for the live path — a string is still accepted (and
+     * still means "just the symbol, default US formatting") for backward compatibility. Core has no
+     * persistence primitive of its own; this is the seam that lets a host add one without core reaching
+     * for storage it doesn't have.
      */
-    currencySymbol?: string | ((planId: string) => Promise<string | undefined>)
+    currencySymbol?: string | CurrencyFormatOpts | ((planId: string) => Promise<string | CurrencyFormatOpts | undefined>)
   }) {
     this.client = opts.client; this.cache = opts.cache; this.journal = opts.journal; this.allowWrites = opts.allowWrites; this.ledger = opts.ledger
     this.writeDisabledHint = opts.writeDisabledHint
@@ -252,20 +257,35 @@ export class Ynab {
    * Memoized per planId for the lifetime of this Ynab instance (Workers deployments construct one Ynab
    * PER REQUEST, so this does not survive across requests — it only collapses the N formatted-money call
    * sites within a single request down to at most one extra fetch). A REJECTED fetch is deliberately NOT
-   * left cached (see the `.catch` below): a transient failure must not degrade every subsequent *Text in
-   * this instance's remaining lifetime with no retry — the next call retries instead. Any failure —
-   * plan not found, offline, malformed response — resolves to `{ symbol: '' }` rather than throwing, so
-   * a symbol-lookup problem degrades to currency-neutral output instead of failing the whole operation.
+   * left cached as a rejection (see `safe` below): a transient failure must not degrade every subsequent
+   * *Text in this instance's remaining lifetime with no retry — the next call retries instead. Any
+   * failure — plan not found, offline, malformed response — resolves to `{ symbol: '' }` rather than
+   * throwing, so a symbol-lookup problem degrades to currency-neutral output instead of failing the
+   * whole operation.
+   *
+   * IMPORTANT 1 fix (currency-symbol review round 3): the cache stores `safe`, an ALREADY-CAUGHT promise
+   * that can never reject — not the raw fetch promise. The prior round's fix (delete-on-reject via
+   * `promise.catch(() => cache.delete(...))` fired as a side effect, while the cached value was still
+   * the raw, rejecting `promise`) only degraded gracefully for the ONE call that happened to `await` it
+   * inside this method's own try/catch; every concurrent cache HIT (`if (cached) return cached`) handed
+   * the caller that same raw promise with no try/catch around it, so a second method resolving currency
+   * for the same plan in the same tick (getPlanOverview, getBudgetHealth, and every method that pairs a
+   * direct #resolveCurrency call with #allTxns/getMonth — both resolve internally — inside one
+   * Promise.all) got a propagated rejection instead of degraded output. Deleting the cache entry inside
+   * the SAME `.catch` that produces `safe`'s fallback value keeps the retry-on-next-call property: the
+   * entry is gone by the time any caller observes `safe`'s resolution, so the next #resolveCurrency call
+   * misses the cache and fetches fresh.
    */
   #currencyCache = new Map<string, Promise<CurrencyFormatOpts>>()
   async #resolveCurrency(planId: string): Promise<CurrencyFormatOpts> {
     const cached = this.#currencyCache.get(planId)
     if (cached) return cached
-    const promise = (async (): Promise<CurrencyFormatOpts> => {
-      if (typeof this.#currencySymbolOverride === 'string') return { symbol: this.#currencySymbolOverride }
+    const raw = (async (): Promise<CurrencyFormatOpts> => {
       if (typeof this.#currencySymbolOverride === 'function') {
         const sym = await this.#currencySymbolOverride(planId)
-        if (sym !== undefined) return { symbol: sym }
+        if (sym !== undefined) return typeof sym === 'string' ? { symbol: sym } : sym
+      } else if (this.#currencySymbolOverride !== undefined) {
+        return typeof this.#currencySymbolOverride === 'string' ? { symbol: this.#currencySymbolOverride } : this.#currencySymbolOverride
       }
       const data = await this.client.request<any>(`/plans/${planId}/settings`)
       const cf = data?.settings?.currency_format
@@ -276,15 +296,12 @@ export class Ynab {
         decimalSeparator: cf?.decimal_separator,
         groupSeparator: cf?.group_separator,
         displaySymbol: cf?.display_symbol,
+        isoCode: cf?.iso_code,
       }
     })()
-    promise.catch(() => { this.#currencyCache.delete(planId) })
-    this.#currencyCache.set(planId, promise)
-    try {
-      return await promise
-    } catch {
-      return { symbol: '' }
-    }
+    const safe = raw.catch((): CurrencyFormatOpts => { this.#currencyCache.delete(planId); return { symbol: '' } })
+    this.#currencyCache.set(planId, safe)
+    return safe
   }
 
   // IMPORTANT 4 fix (currency-symbol review): NOT memoized. listPlans() used to share a cache with the
@@ -349,13 +366,47 @@ export class Ynab {
   }
 
   async getPlanOverview(planId: string) {
-    const [plans, accountsData, month, fmt] = await Promise.all([
-      this.listPlans(),
+    // IMPORTANT 2 fix (currency-symbol review round 3): fetches the raw /plans payload directly (not
+    // via listPlans(), whose mapped shape drops currency_format) so the matched plan's own
+    // currency_format is available both for the ISO-code fallback below and to seed #resolveCurrency's
+    // cache — see the seeding block below this fetch.
+    const plansData = await this.client.request<any>('/plans')
+    const rawPlan = (plansData.plans as any[]).find((p) => p.id === planId)
+    // Seeds #resolveCurrency's cache from the raw /plans entry for a matched REAL plan id — /plans
+    // already carries the exact same currency_format object GET /settings returns, so a real plan id
+    // never needs that extra round-trip (restores the pre-regression 3-call cost: /plans,
+    // /plans/{id}/accounts, /plans/{id}/months/current). `find` can only miss when planId is an alias
+    // ('last-used'/'default' — YNAB never returns an alias as a plan's own `id`, see #resolveCurrency's
+    // docstring), in which case #resolveCurrency falls through to its own /settings fetch below, the
+    // only endpoint that understands aliases. Skipped when a currencySymbolOverride is configured, so a
+    // host's injected seam still wins over this file's own /plans read, and skipped if some other call
+    // already populated the cache for this planId (idempotent).
+    if (rawPlan && this.#currencySymbolOverride === undefined && !this.#currencyCache.has(planId)) {
+      const cf = rawPlan.currency_format
+      this.#currencyCache.set(planId, Promise.resolve({
+        symbol: cf?.currency_symbol ?? '',
+        decimals: cf?.decimal_digits,
+        symbolFirst: cf?.symbol_first,
+        decimalSeparator: cf?.decimal_separator,
+        groupSeparator: cf?.group_separator,
+        displaySymbol: cf?.display_symbol,
+        isoCode: cf?.iso_code,
+      }))
+    }
+    const [accountsData, month, fmt] = await Promise.all([
       this.client.request<any>(`/plans/${planId}/accounts`),
       this.getMonth(planId, 'current'),
       this.#resolveCurrency(planId),
     ])
-    const plan = plans.find((p: any) => p.id === planId) ?? { id: planId, name: '(current plan)', currency: 'USD' }
+    // IMPORTANT 2 fix (currency-symbol review round 3): plan metadata used to fall back to a fabricated
+    // `{ name: '(current plan)', currency: 'USD' }` whenever `find` missed — which, for `currency`, is
+    // EVERY alias call (`rawPlan` above can never match one), leaving a confident, unverified "USD" as
+    // the model's only currency signal in the tool whose own description says "Start here". `currency`
+    // now comes from `fmt.isoCode` — the plan's real, VERIFIED ISO code, resolved via #resolveCurrency
+    // (which DOES understand aliases, via /settings) — falling back to `null`, never a guessed code,
+    // when even that can't be resolved. `name` keeps its pre-existing '(current plan)' placeholder,
+    // which was never a truthfulness problem (no alternate real name is being suppressed by it).
+    const plan = { id: rawPlan?.id ?? planId, name: rawPlan?.name ?? '(current plan)', currency: fmt.isoCode ?? null }
     // NOTE 7 (truthful-output review, closed out): every *Text this method emits uses the plan's real,
     // VERIFIED currency format — resolved via #resolveCurrency, never via listPlans()'s `currencySymbol`
     // field (which still defaults to "$" for its own unrelated public contract, see #resolveCurrency's
@@ -382,7 +433,7 @@ export class Ynab {
     const roundedActivity = Math.round(activity * 100) / 100
     const roundedBudgeted = Math.round(budgeted * 100) / 100
     return {
-      plan: { id: plan.id, name: plan.name, currency: plan.currency },
+      plan,
       month: {
         month: month.month, readyToAssign: month.readyToAssign, readyToAssignText: formatDollars(month.readyToAssign, fmt),
         ageOfMoney: month.ageOfMoney, activity: roundedActivity, activityText: formatDollars(roundedActivity, fmt),
