@@ -1,3 +1,14 @@
+overrides:
+  # Transitive-only advisories. Neither is reachable from our code — we use no hono CORS
+  # middleware, and ajv's URI parsing feeds JSON-schema validation rather than any security
+  # decision — but both are free to patch. Overrides are required because the vulnerable copies
+  # arrive under @modelcontextprotocol/sdk and ajv, which pin them below the fixed versions, so
+  # `pnpm update` cannot reach them.
+  # Held inside 3.x deliberately: ajv 8.x declares `^3.0.1`, so an unbounded '>=3.1.5' pulls
+  # fast-uri 4.x and violates its consumer's own constraint — the kind of mismatch that passes
+  # tests and fails on an edge case. 3.1.5 is the patched version the advisory names.
+  fast-uri: '>=3.1.5 <4'   # host confusion via backslash authority introducer (high)
+  hono: '>=4.12.34'     # ReDoS in CORS middleware (moderate)
 packages:
   - "packages/*"
   - "apps/*"
