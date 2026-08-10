@@ -33,16 +33,21 @@ describe('applyFilters', () => {
 describe('aggregateTxns', () => {
   it('groups and sums by category with counts, sorted most-negative first', () => {
     const txns = [t({ categoryName: 'Rent', amount: -1500 }), t({ categoryName: 'Dining', amount: -20 }), t({ categoryName: 'Dining', amount: -30 })]
-    expect(aggregateTxns(txns, 'category')).toEqual([
+    expect(aggregateTxns(txns, 'category', '$')).toEqual([
       { key: 'Rent', total: -1500, totalText: '-$1,500.00', count: 1 },
       { key: 'Dining', total: -50, totalText: '-$50.00', count: 2 },
     ])
   })
   it('groups by month', () => {
     const txns = [t({ date: '2026-06-02', amount: -1 }), t({ date: '2026-06-20', amount: -2 }), t({ date: '2026-07-01', amount: -4 })]
-    expect(aggregateTxns(txns, 'month')).toEqual([
+    expect(aggregateTxns(txns, 'month', '$')).toEqual([
       { key: '2026-06', total: -3, totalText: '-$3.00', count: 2 },
       { key: '2026-07', total: -4, totalText: '-$4.00', count: 1 },
     ])
+  })
+  // IMPORTANT 5 (currency-symbol review): `symbol` has no default — an explicit `undefined` (the
+  // caller has no verified symbol) must render symbol-less, never a silently-applied "$".
+  it('an explicit undefined symbol renders currency-neutral, not "$"', () => {
+    expect(aggregateTxns([t({ amount: -10 })], 'category', undefined)[0]!.totalText).toBe('-10.00')
   })
 })

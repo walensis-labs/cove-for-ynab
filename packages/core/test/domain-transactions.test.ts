@@ -23,30 +23,43 @@ const apiTxn = (o: any = {}) => ({
 let journal: UndoJournal
 beforeEach(() => { journal = new UndoJournal(join(mkdtempSync(join(tmpdir(), 'u-')), 'undo.json')) })
 
+// Currency-symbol threading (fix/currency-symbol): every *Text-emitting Ynab method now resolves the
+// plan's real currency format via one `GET /plans/{plan_id}/settings` fetch before formatting — an
+// unresolvable symbol renders currency-neutral (no "$") rather than defaulting, so a test whose client
+// doesn't mock the settings endpoint would otherwise see its amountText/inverse strings lose their "$"
+// prefix. This fixture is a resolvable USD plan so the affected tests keep asserting their historical
+// '$'-prefixed behavior. CRITICAL 1 fix: resolution goes through `/settings` (which accepts YNAB's
+// 'last-used'/'default' path-param aliases), not a `find` over `/plans`' list (which cannot).
+const PLAN_SETTINGS_USD = { settings: { currency_format: { iso_code: 'USD', currency_symbol: '$', decimal_digits: 2, symbol_first: true, decimal_separator: '.', group_separator: ',', display_symbol: true } } }
+/** Wraps a client mock's request fn so `GET /plans/{id}/settings` resolves to a USD format before falling through to `fn`. */
+function withUsdPlan(fn: (path: string, opts?: any) => unknown) {
+  return vi.fn(async (path: string, opts?: any) => (path.endsWith('/settings') ? PLAN_SETTINGS_USD : fn(path, opts)))
+}
+
 // Truthful Tool Output, Task 1: the production incident this pins — the model was shown a bare
 // `-1000` next to a raw milliunit `-1000000` in importId and "corrected" a correct −$1,000.00 read
 // down to −$1.00 and −$10.00 across a conversation. `amountText` removes the ambiguity: the model
 // quotes the formatted string instead of re-deriving units from a bare number.
 describe('mapTxn amountText (truthful output)', () => {
   it('the exact production case: raw -1000000 milliunits renders amount -1000 with amountText -$1,000.00', () => {
-    const t = mapTxn(apiTxn({ amount: -1000000 }))
+    const t = mapTxn(apiTxn({ amount: -1000000 }), '$')
     expect(t.amount).toBe(-1000)
     expect(t.amountText).toBe('-$1,000.00')
   })
   it('the boundary the model got wrong: raw -1000 milliunits renders amount -1 with amountText -$1.00 (not -$0.01, not -$1,000.00)', () => {
-    const t = mapTxn(apiTxn({ amount: -1000 }))
+    const t = mapTxn(apiTxn({ amount: -1000 }), '$')
     expect(t.amount).toBe(-1)
     expect(t.amountText).toBe('-$1.00')
     expect(t.amountText).not.toBe('-$0.01')
     expect(t.amountText).not.toBe('-$1,000.00')
   })
   it('zero renders $0.00', () => {
-    const t = mapTxn(apiTxn({ amount: 0 }))
+    const t = mapTxn(apiTxn({ amount: 0 }), '$')
     expect(t.amount).toBe(0)
     expect(t.amountText).toBe('$0.00')
   })
   it('positive amounts render without a leading minus', () => {
-    const t = mapTxn(apiTxn({ amount: 250000 }))
+    const t = mapTxn(apiTxn({ amount: 250000 }), '$')
     expect(t.amount).toBe(250)
     expect(t.amountText).toBe('$250.00')
   })
@@ -57,17 +70,23 @@ describe('mapTxn amountText (truthful output)', () => {
         { amount: -50000, category_name: 'Groceries', memo: null, deleted: false },
         { amount: -25000, category_name: 'Fun', memo: null, deleted: false },
       ],
-    }))
+    }), '$')
     expect(t.subtransactions).toEqual([
       { amount: -50, amountText: '-$50.00', categoryName: 'Groceries', memo: null },
       { amount: -25, amountText: '-$25.00', categoryName: 'Fun', memo: null },
     ])
   })
+  // IMPORTANT 5 (currency-symbol review): `symbol` has no default anymore — an explicit `undefined`
+  // must render symbol-less, never a silently-applied "$".
+  it('an explicit undefined symbol renders currency-neutral, not "$"', () => {
+    const t = mapTxn(apiTxn({ amount: -1000 }), undefined)
+    expect(t.amountText).toBe('-1.00')
+  })
 })
 
 describe('listTransactions', () => {
   it('states the effective 1-year window and paginates', async () => {
-    const client = { request: vi.fn(async () => ({ transactions: [apiTxn(), apiTxn({ id: 't2', amount: -1000 })], server_knowledge: 5 })) } as any
+    const client = { request: withUsdPlan(async () => ({ transactions: [apiTxn(), apiTxn({ id: 't2', amount: -1000 })], server_knowledge: 5 })) } as any
     const y = new Ynab({ client, allowWrites: false })
     const res: any = await y.listTransactions('p1', { limit: 1, offset: 0 })
     expect(res.effectiveWindow.note).toMatch(/defaults to the last 365 days/)
@@ -95,7 +114,7 @@ describe('listTransactions', () => {
     expect(page.transactions[0].id).toBe('new')
   })
   it('aggregate mode returns sums not rows', async () => {
-    const client = { request: vi.fn(async () => ({ transactions: [apiTxn(), apiTxn({ id: 't2', category_name: 'Fun', amount: -2000 })] })) } as any
+    const client = { request: withUsdPlan(async () => ({ transactions: [apiTxn(), apiTxn({ id: 't2', category_name: 'Fun', amount: -2000 })] })) } as any
     const res: any = await new Ynab({ client, allowWrites: false }).listTransactions('p1', { aggregate: 'category' })
     expect(res.aggregate).toEqual([
       { key: 'Groceries', total: -45.5, totalText: '-$45.50', count: 1 },
@@ -104,7 +123,7 @@ describe('listTransactions', () => {
     expect(res.transactions).toBeUndefined()
   })
   it('fields accepts snake_case names and never drops requested keys', async () => {
-    const client = { request: vi.fn(async () => ({ transactions: [apiTxn({ transfer_account_id: null })] })) } as any
+    const client = { request: withUsdPlan(async () => ({ transactions: [apiTxn({ transfer_account_id: null })] })) } as any
     const y = new Ynab({ client, allowWrites: false })
     const res: any = await y.listTransactions('p1', { fields: ['payee_name', 'transfer_account_id', 'amount'] as any })
     // MINOR 4: `fields: ['amount']` must still carry its formatted companion — a projection shouldn't be
@@ -118,7 +137,7 @@ describe('listTransactions', () => {
   // question by default, so it leaves the default projection — but must stay reachable for anyone who
   // explicitly asks for it via `fields`.
   it('drops importId from the default (no fields) projection but returns it via explicit fields', async () => {
-    const client = { request: vi.fn(async () => ({ transactions: [apiTxn({ import_id: 'YNAB:-1000000:2026-08-06:1' })] })) } as any
+    const client = { request: withUsdPlan(async () => ({ transactions: [apiTxn({ import_id: 'YNAB:-1000000:2026-08-06:1' })] })) } as any
     const y = new Ynab({ client, allowWrites: false })
     const defaultRes: any = await y.listTransactions('p1', {})
     expect(defaultRes.transactions[0]).not.toHaveProperty('importId')
@@ -172,6 +191,7 @@ describe('writes', () => {
     const requests: any[] = []
     const client = { request: vi.fn(async (path: string, opts: any) => {
       requests.push({ path, opts })
+      if (path.endsWith('/settings')) return PLAN_SETTINGS_USD
       if (!opts?.method) return { transactions: [oldTxn] }
       return { transactions: [] }
     }) } as any
@@ -180,8 +200,9 @@ describe('writes', () => {
     // Found and its prior category shows up in the inverse text — proves the batched read didn't
     // silently drop this row for being outside a default 1-year window.
     expect(res.inverse).toMatch(/category back to Groceries/)
-    // Exactly one bulk read (not one per row), and it must carry an explicit far-past since_date.
-    const reads = requests.filter((r) => !r.opts?.method)
+    // Exactly one bulk TRANSACTIONS read (not one per row) — the settings currency-format lookup is a
+    // separate, cached-per-instance concern (see fix/currency-symbol) and isn't what this test pins.
+    const reads = requests.filter((r) => !r.opts?.method && !r.path.endsWith('/settings'))
     expect(reads).toHaveLength(1)
     expect(reads[0].opts?.query?.since_date).toBe('2000-01-01')
   })

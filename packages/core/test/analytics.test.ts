@@ -29,7 +29,7 @@ describe('spendingSummary', () => {
   it('compares against a previous period', () => {
     const cur = [t({ categoryName: 'Dining', amount: -100 })]
     const prev = [t({ categoryName: 'Dining', amount: -80 })]
-    const [row] = spendingSummary(cur, { by: 'category', compareTxns: prev })
+    const [row] = spendingSummary(cur, { by: 'category', compareTxns: prev, symbol: '$' })
     expect(row).toMatchObject({ key: 'Dining', total: -100, totalText: '-$100.00', prevTotal: -80, prevTotalText: '-$80.00', changePct: 25 })
   })
 })
@@ -44,6 +44,7 @@ describe('budgetHealth', () => {
         cat({ id: '3', name: 'Visa', group: 'Credit Card Payments', available: 200 }),
       ],
       accounts: [{ name: 'Visa', type: 'creditCard', balance: -350 }],
+      symbol: '$',
     })
     expect(res.readyToAssignText).toBe('-$50.00')
     expect(res.overspent).toEqual([{ name: 'Dining', available: -60, availableText: '-$60.00' }])
@@ -56,18 +57,18 @@ describe('detectRecurring', () => {
   it('finds monthly cadence and amount changes', () => {
     const txns = ['2026-01-15', '2026-02-15', '2026-03-14', '2026-04-15'].map((date, i) =>
       t({ payeeName: 'Netflix', date, amount: i === 3 ? -18.99 : -15.99 }))
-    const [r] = detectRecurring(txns)
+    const [r] = detectRecurring(txns, '$')
     expect(r).toMatchObject({ payee: 'Netflix', cadence: 'monthly', lastAmount: -18.99, lastAmountText: '-$18.99', occurrences: 4, amountChanged: true })
   })
   it('ignores payees with fewer than 3 occurrences', () => {
-    expect(detectRecurring([t({}), t({})])).toEqual([])
+    expect(detectRecurring([t({}), t({})], '$')).toEqual([])
   })
 })
 
 describe('incomeVsExpense', () => {
   it('splits by sign, marks the current month partial', () => {
     const txns = [t({ date: '2026-06-01', amount: 3000 }), t({ date: '2026-06-05', amount: -1200 }), t({ date: '2026-07-02', amount: -100 })]
-    expect(incomeVsExpense(txns, '2026-07-15')).toEqual([
+    expect(incomeVsExpense(txns, '2026-07-15', '$')).toEqual([
       { month: '2026-06', income: 3000, incomeText: '$3,000.00', expense: -1200, expenseText: '-$1,200.00', net: 1800, netText: '$1,800.00', partial: false },
       { month: '2026-07', income: 0, incomeText: '$0.00', expense: -100, expenseText: '-$100.00', net: -100, netText: '-$100.00', partial: true },
     ])
@@ -89,9 +90,27 @@ describe('monthWindowStart', () => {
 describe('netWorthHistory', () => {
   it('cumulates month over month', () => {
     const txns = [t({ date: '2026-05-01', amount: 1000 }), t({ date: '2026-06-10', amount: -250 }), t({ date: '2026-06-11', amount: -250 })]
-    expect(netWorthHistory(txns)).toEqual([
+    expect(netWorthHistory(txns, '$')).toEqual([
       { month: '2026-05', netWorth: 1000, netWorthText: '$1,000.00' },
       { month: '2026-06', netWorth: 500, netWorthText: '$500.00' },
     ])
+  })
+})
+
+// IMPORTANT 5 (currency-symbol review): the seven public functions that used to default `symbol` to
+// "$" (mapTxn, aggregateTxns, spendingSummary, budgetHealth, detectRecurring, incomeVsExpense,
+// netWorthHistory) must not launder an unverified symbol — an explicit `undefined` renders symbol-less.
+describe('currency-symbol IMPORTANT 5: no unverified "$" default', () => {
+  it('detectRecurring / incomeVsExpense / netWorthHistory render symbol-less on explicit undefined', () => {
+    const txns = ['2026-01-15', '2026-02-15', '2026-03-14', '2026-04-15'].map((date) => t({ payeeName: 'Netflix', date, amount: -15.99 }))
+    expect(detectRecurring(txns, undefined)[0]!.lastAmountText).toBe('-15.99')
+    expect(incomeVsExpense([t({ amount: 100 })], '2026-07-15', undefined)[0]!.incomeText).toBe('100.00')
+    expect(netWorthHistory([t({ amount: 100 })], undefined)[0]!.netWorthText).toBe('100.00')
+  })
+  it('spendingSummary / budgetHealth render symbol-less on explicit undefined', () => {
+    const [row] = spendingSummary([t({ amount: -10 })], { by: 'category', symbol: undefined })
+    expect(row!.totalText).toBe('-10.00')
+    const health = budgetHealth({ readyToAssign: -50, categories: [], accounts: [], symbol: undefined })
+    expect(health.readyToAssignText).toBe('-50.00')
   })
 })
