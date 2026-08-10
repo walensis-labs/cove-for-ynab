@@ -1,6 +1,6 @@
 ---
 "@walensis/cove-core": minor
-"@walensis/mcp-for-ynab": patch
+"@walensis/cove-mcp": minor
 ---
 
 **Non-USD budgets no longer get a false "$" in their `*Text` companions — and the alias every tool
@@ -61,7 +61,7 @@ budgets: a straight regression from `"$1,500.00"` to `"1,500.00"`.
   surface instead of the internal one. `symbol` is now `string | undefined` with no default; an
   explicit `undefined` renders symbol-less. `amount` and every other numeric field are unchanged in
   meaning and type; only `*Text` rendering changed.
-- `@walensis/mcp-for-ynab`: money-touching tool descriptions no longer assert "decimal dollars" —
+- `@walensis/cove-mcp`: money-touching tool descriptions no longer assert "decimal dollars" —
   they name "decimal major units of the budget's own currency", since a non-USD budget's
   symbol-less `*Text` sitting next to prose that says "dollars" was itself misleading enough to
   invite a model to render `"−1,000.00"` as `"−$1,000.00"`.

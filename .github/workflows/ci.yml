@@ -13,6 +13,9 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      # Catch a changeset naming a package that doesn't exist BEFORE merge. changesets only
+      # discovers this inside the publish step on main, so a stale name costs a release cycle.
+      - run: node scripts/validate-changesets.mjs
       # build first: packages/core only exposes typed exports via dist/*.d.ts,
       # so a fresh checkout can't typecheck/test apps/mcp against it otherwise.
       - run: pnpm build && pnpm typecheck && pnpm test
