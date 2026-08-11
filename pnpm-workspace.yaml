@@ -1,4 +1,13 @@
 overrides:
+  # Dev-only (changesets -> @manypkg/get-packages -> read-yaml-file). Quadratic CPU on !!omap
+  # parsing; it only ever parses our own changeset files, so not attacker-reachable — patched
+  # because it's free. Held inside 3.x: read-yaml-file declares ^3, and the 4.x line is a
+  # different API.
+  # Scoped to the 3.x line with `js-yaml@3`: the advisory's vulnerable range is >=3.0.0 <3.15.1,
+  # so 4.x is unaffected — and an unscoped '<4' bound dragged @redocly/openapi-core (the
+  # OpenAPI codegen behind gen:api) from 4.2.0 down a major, where safeLoad/safeDump no
+  # longer exist. Bump the vulnerable line only; leave 4.x alone.
+  js-yaml@3: '>=3.15.1'
   # Transitive-only advisories. Neither is reachable from our code — we use no hono CORS
   # middleware, and ajv's URI parsing feeds JSON-schema validation rather than any security
   # decision — but both are free to patch. Overrides are required because the vulnerable copies
