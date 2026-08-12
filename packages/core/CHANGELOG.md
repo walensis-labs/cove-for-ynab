@@ -1,5 +1,16 @@
 # @walensis/mcp-for-ynab-core
 
+## 0.7.0
+
+### Minor Changes
+
+- 9edb521: The YNAB API client layer now lives in @walensis/ynab-client; cove-core depends on it and re-exports the full surface, so existing imports keep working.
+
+### Patch Changes
+
+- Updated dependencies [9edb521]
+  - @walensis/ynab-client@0.1.0
+
 ## 0.6.0
 
 ### Minor Changes
