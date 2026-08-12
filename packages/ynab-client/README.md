@@ -13,9 +13,14 @@ npm install @walensis/ynab-client
 ```typescript
 import { YnabClient, RateLimiter } from '@walensis/ynab-client'
 
-const limiter = new RateLimiter({ requests: 200, intervalMs: 3600000 })
-const client = new YnabClient({ token: process.env.YNAB_TOKEN, limiter })
-const budgets = await client.request('/budgets', { method: 'GET' })
+// Defaults to 190 requests/hour (headroom under YNAB's 200/hour limit).
+const limiter = new RateLimiter()
+
+const token = process.env.YNAB_TOKEN
+if (!token) throw new Error('set YNAB_TOKEN')
+
+const client = new YnabClient({ token, limiter })
+const data = await client.request<{ plans: Array<{ id: string; name: string }> }>('/plans')
 ```
 
 ## Spec drift
