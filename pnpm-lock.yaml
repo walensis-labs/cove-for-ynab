@@ -71,6 +71,12 @@ importers:
         version: 4.117.0(@cloudflare/workers-types@5.20260731.1)
 
   packages/core:
+    dependencies:
+      '@walensis/ynab-client':
+        specifier: workspace:*
+        version: link:../ynab-client
+
+  packages/ynab-client:
     devDependencies:
       openapi-typescript:
         specifier: ^7.0.0

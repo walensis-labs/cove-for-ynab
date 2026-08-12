@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { Ynab } from '../src/domain.js'
 import { UndoJournal } from '../src/undo-journal.js'
 import { dollarsToMilli } from '../src/money.js'
-import { YnabApiError } from '../src/client.js'
+import { YnabApiError } from '@walensis/ynab-client'
 
 let journal: UndoJournal
 beforeEach(() => { journal = new UndoJournal(join(mkdtempSync(join(tmpdir(), 'u-')), 'undo.json')) })
