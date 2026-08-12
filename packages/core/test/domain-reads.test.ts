@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { Ynab } from '../src/domain.js'
-import { DeltaCache } from '../src/delta-cache.js'
+import { DeltaCache } from '@walensis/ynab-client'
 
 function fakeClient(routes: Record<string, (q?: any) => unknown>) {
   return {

@@ -16,7 +16,7 @@ function view(name, version) {
   }
 }
 
-for (const dir of ['packages/core', 'apps/mcp']) {
+for (const dir of ['packages/core', 'packages/ynab-client', 'apps/mcp']) {
   const pkg = JSON.parse(readFileSync(`${dir}/package.json`, 'utf8'))
   let ok = false
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {

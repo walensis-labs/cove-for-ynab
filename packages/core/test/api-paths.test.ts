@@ -9,7 +9,11 @@ import { dirname, join } from 'node:path'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const domainSrc = readFileSync(join(__dirname, '../src/domain.ts'), 'utf8')
-const specSrc = readFileSync(join(__dirname, '../openapi/ynab-v1.yaml'), 'utf8')
+// Deliberate filesystem reach-across, not a package import: ynab-client's `exports` map only
+// declares "." (see packages/ynab-client/package.json), so resolving the spec through package
+// resolution (e.g. `@walensis/ynab-client/openapi/ynab-v1.yaml`) would throw
+// ERR_PACKAGE_PATH_NOT_EXPORTED. The relative path is the intended mechanism here.
+const specSrc = readFileSync(join(__dirname, '../../ynab-client/openapi/ynab-v1.yaml'), 'utf8')
 
 /** Every template-literal path in domain.ts that starts with /plans or /user. */
 function extractUsedPaths(src: string): string[] {

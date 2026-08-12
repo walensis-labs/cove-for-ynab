@@ -3,7 +3,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Ynab, lastCompleteMonth } from '../src/domain.js'
-import { YnabApiError } from '../src/client.js'
+import { YnabApiError } from '@walensis/ynab-client'
 import { LedgerStore, type LedgerLike, type MonthCloseRecord } from '../src/ledger.js'
 
 // backfillLedger caps written records at "the last complete month" relative to the REAL clock (see
